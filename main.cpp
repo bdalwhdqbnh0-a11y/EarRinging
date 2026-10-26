@@ -76,6 +76,22 @@ static std::string GetPackageName()
     return buf[0] ? std::string(buf) : std::string("com.rockstargames.gtasa");
 }
 
+extern "C" __attribute__((visibility("default"))) void OnModLoad();
+
+// Find the data folder next to the "mods" folder this .so was loaded from,
+// e.g. .../com.rockstargames.gtasa/mods//libEarRinging.so -> .../com.rockstargames.gtasa/EarRinging/
+static std::string DetectDir()
+{
+    Dl_info info;
+    if (dladdr((void*)&OnModLoad, &info) && info.dli_fname)
+    {
+        std::string p = info.dli_fname;
+        size_t pos = p.rfind("/mods");
+        if (pos != std::string::npos) return p.substr(0, pos) + "/EarRinging/";
+    }
+    return "/storage/emulated/0/Android/data/" + GetPackageName() + "/files/EarRinging/";
+}
+
 static void LoadConfig()
 {
     std::string path = g_Dir + "EarRinging.ini";
@@ -252,9 +268,9 @@ static void AudioThread()
 
 // ---------------------------------------------------------------- entry point
 
-extern "C" void OnModLoad()
+extern "C" __attribute__((visibility("default"))) void OnModLoad()
 {
-    g_Dir = "/storage/emulated/0/Android/data/" + GetPackageName() + "/files/EarRinging/";
+    g_Dir = DetectDir();
     mkdir(g_Dir.c_str(), 0777);
     g_Log = fopen((g_Dir + "log.txt").c_str(), "w");
     LOGI("OnModLoad called, dir=%s", g_Dir.c_str());
