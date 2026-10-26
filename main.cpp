@@ -14,6 +14,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include <cstdarg>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -31,8 +32,20 @@
 MYMODCFG(net.earringing.mod, Ear Ringing, 1.0.0, Converted)
 
 #define TAG "EarRinging"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+static FILE* g_Log = nullptr;
+static void LogF(const char* lvl, const char* fmt, ...)
+{
+    char buf[512];
+    va_list a;
+    va_start(a, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, a);
+    va_end(a);
+    __android_log_print(ANDROID_LOG_INFO, TAG, "%s", buf);
+    if (g_Log) { fprintf(g_Log, "[%s] %s\n", lvl, buf); fflush(g_Log); }
+}
+#define LOGI(...) LogF("I", __VA_ARGS__)
+#define LOGE(...) LogF("E", __VA_ARGS__)
 
 struct CVector { float x, y, z; };
 
@@ -48,6 +61,7 @@ static FindPlayerCoors_t g_FindPlayerCoors  = nullptr;
 static float g_Volume      = 1.0f;
 static float g_MinDistance = 15.0f;
 static float g_FadeSeconds = 6.0f;
+static int   g_TestOnLoad  = 1;   // play a short test ringing when the audio is ready
 
 static std::string g_Dir;                 // .../Android/data/<pkg>/files/EarRinging/
 static std::atomic<float> g_Pending{0.0f};
@@ -78,6 +92,7 @@ static void LoadConfig()
         if      (key == "Volume")      g_Volume      = val;
         else if (key == "MinDistance") g_MinDistance = val;
         else if (key == "FadeSeconds") g_FadeSeconds = val;
+        else if (key == "TestOnLoad")  g_TestOnLoad  = (int)val;
     }
     fclose(f);
     if (g_Volume < 0.0f) g_Volume = 0.0f;
@@ -141,7 +156,7 @@ static uintptr_t ScanDynsym(const char* needle)
 
 static uintptr_t FindFunction(void* handle, const char* const* exactNames, const char* needle)
 {
-    for (int i = 0; exactNames[i]; ++i)
+    for (int i = 0; handle && exactNames[i]; ++i)
     {
         uintptr_t p = (uintptr_t)aml->GetSym(handle, exactNames[i]);
         if (p) { LOGI("Resolved %s", exactNames[i]); return p; }
@@ -162,6 +177,8 @@ static bool AddExplosion_hook(void* victim, void* creator, int type, CVector pos
         CVector p = g_FindPlayerCoors(-1);
         float dx = pos.x - p.x, dy = pos.y - p.y, dz = pos.z - p.z;
         float d = sqrtf(dx * dx + dy * dy + dz * dz);
+        static int s_logged = 0;
+        if (s_logged < 20) { ++s_logged; LOGI("Explosion type=%d distance=%.1f (limit %.1f)", type, d, g_MinDistance); }
         if (d < g_MinDistance)
         {
             float level = (g_MinDistance - d) / (g_MinDistance * 0.7f);
@@ -191,6 +208,7 @@ static void AudioThread()
     }
     ma_sound_set_looping(&sound, MA_TRUE);
     LOGI("Audio ready");
+    if (g_TestOnLoad) { g_Pending.store(1.0f); LOGI("Test ringing started"); }
 
     float level = 0.0f;
     bool playing = false;
@@ -237,9 +255,13 @@ static void AudioThread()
 extern "C" void OnModLoad()
 {
     g_Dir = "/storage/emulated/0/Android/data/" + GetPackageName() + "/files/EarRinging/";
+    mkdir(g_Dir.c_str(), 0777);
+    g_Log = fopen((g_Dir + "log.txt").c_str(), "w");
+    LOGI("OnModLoad called, dir=%s", g_Dir.c_str());
     LoadConfig();
 
     void* lib = aml->GetLibHandle("libGTASA.so");
+    LOGI("libGTASA handle=%p", lib);
 
     static const char* const explosionNames[] = {
         "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionType7CVectorjhfh",
@@ -253,6 +275,10 @@ extern "C" void OnModLoad()
 
     uintptr_t explosion = FindFunction(lib, explosionNames, "10CExplosion12AddExplosion");
     uintptr_t player    = FindFunction(lib, playerNames,    "FindPlayerCoors");
+    LOGI("AddExplosion=%p FindPlayerCoors=%p", (void*)explosion, (void*)player);
+
+    // Start audio even if the hook fails, so the test sound still works
+    std::thread(AudioThread).detach();
 
     if (!explosion || !player)
     {
@@ -263,7 +289,5 @@ extern "C" void OnModLoad()
 
     g_FindPlayerCoors = (FindPlayerCoors_t)player;
     aml->Hook((void*)explosion, (void*)AddExplosion_hook, (void**)&g_AddExplosionOrig);
-
-    std::thread(AudioThread).detach();
-    LOGI("Loaded");
+    LOGI("Hook installed");
 }
