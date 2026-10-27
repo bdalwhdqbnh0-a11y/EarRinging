@@ -221,7 +221,8 @@ static void DumpSymbols()
     static const char* const keys[] = {
         "AnimManager", "AnimBlend", "DamageResponse", "EventDamage", "TaskSimpleDie",
         "TaskComplexDie", "TaskSimpleFall", "CAnimBlock", "CFileMgr", "RwStream",
-        "CStreaming", "CExplosion", "FindPlayerCoors", nullptr
+        "CStreaming", "CExplosion", "FindPlayerCoors",
+        "CPools", "ms_numAnim", "ms_aAnim", "ms_pPedPool", "CPedIntelligence", nullptr
     };
 
     const uint8_t* base = (const uint8_t*)map;
@@ -240,14 +241,20 @@ static void DumpSymbols()
             size_t n = sh[i].sh_size / sizeof(Elf64_Sym);
             for (size_t k = 0; k < n; ++k)
             {
-                if (!syms[k].st_value || ELF64_ST_TYPE(syms[k].st_info) != STT_FUNC) continue;
+                int type = ELF64_ST_TYPE(syms[k].st_info);
+                if (!syms[k].st_value || (type != STT_FUNC && type != STT_OBJECT)) continue;
                 ++total;
                 const char* name = strs + syms[k].st_name;
                 for (int j = 0; keys[j]; ++j)
                 {
                     if (strstr(name, keys[j]))
                     {
-                        if (written < 6000) { fprintf(out, "0x%lX %s\n", (unsigned long)syms[k].st_value, name); ++written; }
+                        if (written < 9000)
+                        {
+                            fprintf(out, "%s 0x%lX size=%lu %s\n", type == STT_OBJECT ? "OBJ " : "FUNC",
+                                    (unsigned long)syms[k].st_value, (unsigned long)syms[k].st_size, name);
+                            ++written;
+                        }
                         break;
                     }
                 }
