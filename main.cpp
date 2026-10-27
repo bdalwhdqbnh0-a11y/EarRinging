@@ -369,7 +369,16 @@ static void RunDeathPhase()
         if (!fOpen || !fClose || !fLoadS) return;
         // rwSTREAMFILENAME = 2, rwSTREAMREAD = 1
         LOGI("RwStreamOpen(%s)", ifp.c_str());
-        void* stream = ((void* (*)(int, int, const void*))fOpen)(2, 1, ifp.c_str());
+        // File-name streams fail on Android, so read the file ourselves and open a MEMORY stream
+        // (rwSTREAMMEMORY = 3; RwMemory = { uint8_t* start; uint32_t length; })
+        static std::string blob;
+        { FILE* f = fopen(ifp.c_str(), "rb");
+          if (!f) { LOGE("fopen failed"); return; }
+          fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+          blob.resize(sz); size_t rd = fread(&blob[0], 1, sz, f); fclose(f);
+          LOGI("Read %zu of %ld bytes", rd, sz); }
+        struct { uint8_t* start; uint32_t length; } mem = { (uint8_t*)&blob[0], (uint32_t)blob.size() };
+        void* stream = ((void* (*)(int, int, const void*))fOpen)(3, 1, &mem);
         LOGI("stream=%p", stream);
         if (!stream) return;
         LOGI("Calling LoadAnimFile(stream)");
