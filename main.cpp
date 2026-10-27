@@ -82,6 +82,10 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad();
 // e.g. .../com.rockstargames.gtasa/mods//libEarRinging.so -> .../com.rockstargames.gtasa/EarRinging/
 static std::string DetectDir()
 {
+    // This device's game data folder (the one AML prints in its crash log and where "mods" lives).
+    std::string unprotected = "/storage/emulated/0/Android_unprotected/data/" + GetPackageName();
+    if (access(unprotected.c_str(), W_OK) == 0) return unprotected + "/EarRinging/";
+
     Dl_info info;
     if (dladdr((void*)&OnModLoad, &info) && info.dli_fname)
     {
@@ -185,6 +189,75 @@ static uintptr_t ScanDynsym(const char* needle)
     }
     munmap(map, st.st_size);
     return result;
+}
+
+// Writes symbols.txt: names (and offsets) of libGTASA functions that matter for death/animation mods.
+static void DumpSymbols()
+{
+    struct Ctx { std::string path; uintptr_t bias = 0; } ctx;
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
+        Ctx* c = (Ctx*)data;
+        if (info->dlpi_name && strstr(info->dlpi_name, "libGTASA.so"))
+        {
+            c->path = info->dlpi_name;
+            c->bias = info->dlpi_addr;
+            return 1;
+        }
+        return 0;
+    }, &ctx);
+    if (ctx.path.empty()) { LOGE("DumpSymbols: libGTASA path not found"); return; }
+
+    int fd = open(ctx.path.c_str(), O_RDONLY);
+    if (fd < 0) { LOGE("DumpSymbols: cannot open %s", ctx.path.c_str()); return; }
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return; }
+    void* map = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) { LOGE("DumpSymbols: mmap failed"); return; }
+
+    FILE* out = fopen((g_Dir + "symbols.txt").c_str(), "w");
+    if (!out) { LOGE("DumpSymbols: cannot create symbols.txt"); munmap(map, st.st_size); return; }
+
+    static const char* const keys[] = {
+        "AnimManager", "AnimBlend", "DamageResponse", "EventDamage", "TaskSimpleDie",
+        "TaskComplexDie", "TaskSimpleFall", "CAnimBlock", "CFileMgr", "RwStream",
+        "CStreaming", "CExplosion", "FindPlayerCoors", nullptr
+    };
+
+    const uint8_t* base = (const uint8_t*)map;
+    const Elf64_Ehdr* eh = (const Elf64_Ehdr*)base;
+    size_t total = 0, written = 0;
+    int sections = 0;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) == 0 && eh->e_shoff && eh->e_shnum)
+    {
+        const Elf64_Shdr* sh = (const Elf64_Shdr*)(base + eh->e_shoff);
+        for (int i = 0; i < eh->e_shnum; ++i)
+        {
+            if (sh[i].sh_type != SHT_DYNSYM && sh[i].sh_type != SHT_SYMTAB) continue;
+            ++sections;
+            const Elf64_Sym* syms = (const Elf64_Sym*)(base + sh[i].sh_offset);
+            const char* strs = (const char*)(base + sh[sh[i].sh_link].sh_offset);
+            size_t n = sh[i].sh_size / sizeof(Elf64_Sym);
+            for (size_t k = 0; k < n; ++k)
+            {
+                if (!syms[k].st_value || ELF64_ST_TYPE(syms[k].st_info) != STT_FUNC) continue;
+                ++total;
+                const char* name = strs + syms[k].st_name;
+                for (int j = 0; keys[j]; ++j)
+                {
+                    if (strstr(name, keys[j]))
+                    {
+                        if (written < 6000) { fprintf(out, "0x%lX %s\n", (unsigned long)syms[k].st_value, name); ++written; }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    fprintf(out, "# symbol tables scanned: %d, functions seen: %zu, written: %zu\n", sections, total, written);
+    fclose(out);
+    munmap(map, st.st_size);
+    LOGI("DumpSymbols done: tables=%d functions=%zu written=%zu", sections, total, written);
 }
 
 static uintptr_t FindFunction(void* handle, const char* const* exactNames, const char* needle)
@@ -293,6 +366,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     if (!g_Log) g_Log = fopen("/storage/emulated/0/Download/EarRinging_log.txt", "w");
     LOGI("OnModLoad called, dir=%s", g_Dir.c_str());
     LoadConfig();
+    std::thread(DumpSymbols).detach();
 
     void* lib = aml->GetLibHandle("libGTASA.so");
     LOGI("libGTASA handle=%p", lib);
