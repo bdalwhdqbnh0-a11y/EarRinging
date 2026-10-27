@@ -62,6 +62,7 @@ static float g_Volume      = 1.0f;
 static float g_MinDistance = 15.0f;
 static float g_FadeSeconds = 6.0f;
 static int   g_TestOnLoad  = 1;   // play a short test ringing when the audio is ready
+static int   g_DeathPhase  = 0;   // 0 = off, 1 = just find symbols, 2 = also load "Death Anims.ifp"
 
 static std::string g_Dir;                 // .../Android/data/<pkg>/files/EarRinging/
 static std::atomic<float> g_Pending{0.0f};
@@ -130,6 +131,7 @@ static void LoadConfig()
         else if (key == "MinDistance") g_MinDistance = val;
         else if (key == "FadeSeconds") g_FadeSeconds = val;
         else if (key == "TestOnLoad")  g_TestOnLoad  = (int)val;
+        else if (key == "DeathPhase")  g_DeathPhase  = (int)val;
     }
     fclose(f);
     if (g_Volume < 0.0f) g_Volume = 0.0f;
@@ -277,6 +279,115 @@ static uintptr_t FindFunction(void* handle, const char* const* exactNames, const
     return ScanDynsym(needle);
 }
 
+
+// ---------------------------------------------------------------- death mod (phase 1/2)
+
+// Exact-name lookup in libGTASA's .dynsym and .symtab (functions AND data). Returns runtime address.
+static uintptr_t ResolveExact(const char* name)
+{
+    struct Ctx { std::string path; uintptr_t bias = 0; } ctx;
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
+        Ctx* c = (Ctx*)data;
+        if (info->dlpi_name && strstr(info->dlpi_name, "libGTASA.so"))
+        { c->path = info->dlpi_name; c->bias = info->dlpi_addr; return 1; }
+        return 0;
+    }, &ctx);
+    if (ctx.path.empty()) return 0;
+    int fd = open(ctx.path.c_str(), O_RDONLY);
+    if (fd < 0) return 0;
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return 0; }
+    void* map = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) return 0;
+    uintptr_t result = 0;
+    const uint8_t* base = (const uint8_t*)map;
+    const Elf64_Ehdr* eh = (const Elf64_Ehdr*)base;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) == 0 && eh->e_shoff && eh->e_shnum)
+    {
+        const Elf64_Shdr* sh = (const Elf64_Shdr*)(base + eh->e_shoff);
+        for (int i = 0; i < eh->e_shnum && !result; ++i)
+        {
+            if (sh[i].sh_type != SHT_DYNSYM && sh[i].sh_type != SHT_SYMTAB) continue;
+            const Elf64_Sym* syms = (const Elf64_Sym*)(base + sh[i].sh_offset);
+            const char* strs = (const char*)(base + sh[sh[i].sh_link].sh_offset);
+            size_t n = sh[i].sh_size / sizeof(Elf64_Sym);
+            for (size_t k = 0; k < n; ++k)
+                if (syms[k].st_value && strcmp(strs + syms[k].st_name, name) == 0)
+                { result = ctx.bias + syms[k].st_value; break; }
+        }
+    }
+    munmap(map, st.st_size);
+    return result;
+}
+
+static void HexDump(const char* label, const void* p, size_t n)
+{
+    char buf[400]; size_t o = 0;
+    const uint8_t* b = (const uint8_t*)p;
+    for (size_t i = 0; i < n && o + 4 < sizeof(buf); ++i) o += snprintf(buf + o, sizeof(buf) - o, "%02X ", b[i]);
+    LOGI("%s: %s", label, buf);
+}
+
+typedef void (*LoadAnimFile_t)(const char* path);
+static std::atomic<bool> g_Phase2Done{false};
+
+// Runs ONCE on the game's own thread (called from a per-frame hook).
+static void RunDeathPhase()
+{
+    LOGI("DeathPhase %d starting", g_DeathPhase);
+    uintptr_t pNumAnims  = ResolveExact("_ZN12CAnimManager16ms_numAnimationsE");
+    uintptr_t pNumBlocks = ResolveExact("_ZN12CAnimManager16ms_numAnimBlocksE");
+    uintptr_t pAnims     = ResolveExact("_ZN12CAnimManager14ms_aAnimationsE");
+    uintptr_t pBlocks    = ResolveExact("_ZN12CAnimManager14ms_aAnimBlocksE");
+    uintptr_t pPedPool   = ResolveExact("_ZN6CPools11ms_pPedPoolE");
+    uintptr_t fLoad      = ResolveExact("_ZN12CAnimManager12LoadAnimFileEPKc");
+    LOGI("numAnims=%p numBlocks=%p anims=%p blocks=%p pedPool=%p LoadAnimFile=%p",
+         (void*)pNumAnims, (void*)pNumBlocks, (void*)pAnims, (void*)pBlocks, (void*)pPedPool, (void*)fLoad);
+    if (!pNumAnims || !pNumBlocks || !pAnims || !pBlocks) { LOGE("Anim globals missing"); return; }
+
+    int nA = *(int*)pNumAnims, nB = *(int*)pNumBlocks;
+    LOGI("Before: %d animations, %d blocks", nA, nB);
+    for (int i = 0; i < nB && i < 120; ++i)
+    {
+        const char* nm = (const char*)(pBlocks + (size_t)i * 48);
+        char name[17] = {0}; memcpy(name, nm, 16);
+        LOGI("block[%d] name='%s'", i, name);
+    }
+    if (nB > 0) HexDump("block[0] raw(48)", (void*)pBlocks, 48);
+    if (nA > 0) HexDump("anim[0] raw(40)", (void*)pAnims, 40);
+    if (nA > 1) HexDump("anim[1] raw(40)", (void*)(pAnims + 40), 40);
+
+    if (g_DeathPhase >= 2 && fLoad)
+    {
+        std::string ifp = g_Dir + "Death Anims.ifp";
+        if (access(ifp.c_str(), R_OK) != 0) { LOGE("Missing %s", ifp.c_str()); return; }
+        LOGI("Calling LoadAnimFile(%s)", ifp.c_str());
+        ((LoadAnimFile_t)fLoad)(ifp.c_str());
+        int nA2 = *(int*)pNumAnims, nB2 = *(int*)pNumBlocks;
+        LOGI("After: %d animations (+%d), %d blocks", nA2, nA2 - nA, nB2);
+        for (int i = nA; i < nA2 && i < nA + 6; ++i)
+        {
+            char lab[32]; snprintf(lab, sizeof(lab), "newanim[%d] raw(40)", i);
+            HexDump(lab, (void*)(pAnims + (size_t)i * 40), 40);
+        }
+    }
+    LOGI("DeathPhase done");
+}
+
+// Per-frame hook: FindPlayerCoors is called by the game every frame on its main thread.
+static FindPlayerCoors_t g_FindPlayerCoorsOrig = nullptr;
+static CVector FindPlayerCoors_hook(int id)
+{
+    static int s_calls = 0;
+    if (g_DeathPhase > 0 && !g_Phase2Done.load() && ++s_calls > 1500)   // a few seconds into gameplay
+    {
+        g_Phase2Done.store(true);
+        RunDeathPhase();
+    }
+    return g_FindPlayerCoorsOrig(id);
+}
+
 // ---------------------------------------------------------------- hook
 
 static bool AddExplosion_hook(void* victim, void* creator, int type, CVector pos,
@@ -402,7 +513,8 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
         return;
     }
 
-    g_FindPlayerCoors = (FindPlayerCoors_t)player;
+    aml->Hook((void*)player, (void*)FindPlayerCoors_hook, (void**)&g_FindPlayerCoorsOrig);
+    g_FindPlayerCoors = g_FindPlayerCoorsOrig;   // our own calls bypass the hook
     aml->Hook((void*)explosion, (void*)AddExplosion_hook, (void**)&g_AddExplosionOrig);
     LOGI("Hook installed");
 }
