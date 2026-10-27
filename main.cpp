@@ -92,6 +92,23 @@ static std::string DetectDir()
     return "/storage/emulated/0/Android/data/" + GetPackageName() + "/files/EarRinging/";
 }
 
+// Stage markers: tiny files that prove how far loading got.
+//   1_loaded.txt   -> the .so was loaded by the game (constructor ran)
+//   2_preload.txt  -> AML called OnModPreLoad
+//   (log.txt)      -> AML called OnModLoad
+static void Marker(const char* name)
+{
+    std::string dir = DetectDir();
+    mkdir(dir.c_str(), 0777);
+    FILE* f = fopen((dir + name).c_str(), "w");
+    if (!f) f = fopen((std::string("/storage/emulated/0/Download/EarRinging_") + name).c_str(), "w");
+    if (f) { fputs("ok\n", f); fclose(f); }
+}
+
+__attribute__((constructor)) static void EarRingingCtor() { Marker("1_loaded.txt"); }
+
+extern "C" __attribute__((visibility("default"))) void OnModPreLoad() { Marker("2_preload.txt"); }
+
 static void LoadConfig()
 {
     std::string path = g_Dir + "EarRinging.ini";
@@ -273,6 +290,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_Dir = DetectDir();
     mkdir(g_Dir.c_str(), 0777);
     g_Log = fopen((g_Dir + "log.txt").c_str(), "w");
+    if (!g_Log) g_Log = fopen("/storage/emulated/0/Download/EarRinging_log.txt", "w");
     LOGI("OnModLoad called, dir=%s", g_Dir.c_str());
     LoadConfig();
 
