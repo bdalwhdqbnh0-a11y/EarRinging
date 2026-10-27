@@ -348,7 +348,7 @@ static void RunDeathPhase()
 
     int nA = *(int*)pNumAnims, nB = *(int*)pNumBlocks;
     LOGI("Before: %d animations, %d blocks", nA, nB);
-    for (int i = 0; i < nB && i < 120; ++i)
+    for (int i = 0; i < 4; ++i)
     {
         const char* nm = (const char*)(pBlocks + (size_t)i * 48);
         char name[17] = {0}; memcpy(name, nm, 16);
@@ -358,12 +358,23 @@ static void RunDeathPhase()
     if (nA > 0) HexDump("anim[0] raw(40)", (void*)pAnims, 40);
     if (nA > 1) HexDump("anim[1] raw(40)", (void*)(pAnims + 40), 40);
 
-    if (g_DeathPhase >= 2 && fLoad)
+    if (g_DeathPhase >= 2)
     {
         std::string ifp = g_Dir + "Death Anims.ifp";
         if (access(ifp.c_str(), R_OK) != 0) { LOGE("Missing %s", ifp.c_str()); return; }
-        LOGI("Calling LoadAnimFile(%s)", ifp.c_str());
-        ((LoadAnimFile_t)fLoad)(ifp.c_str());
+        uintptr_t fOpen  = ResolveExact("_Z12RwStreamOpen12RwStreamType18RwStreamAccessTypePKv");
+        uintptr_t fClose = ResolveExact("_Z13RwStreamCloseP8RwStreamPv");
+        uintptr_t fLoadS = ResolveExact("_ZN12CAnimManager12LoadAnimFileEP8RwStreambPA32_Kc");
+        LOGI("RwStreamOpen=%p RwStreamClose=%p LoadAnimFile(stream)=%p", (void*)fOpen, (void*)fClose, (void*)fLoadS);
+        if (!fOpen || !fClose || !fLoadS) return;
+        // rwSTREAMFILENAME = 2, rwSTREAMREAD = 1
+        LOGI("RwStreamOpen(%s)", ifp.c_str());
+        void* stream = ((void* (*)(int, int, const void*))fOpen)(2, 1, ifp.c_str());
+        LOGI("stream=%p", stream);
+        if (!stream) return;
+        LOGI("Calling LoadAnimFile(stream)");
+        ((void (*)(void*, bool, const char (*)[32]))fLoadS)(stream, false, nullptr);
+        ((int (*)(void*, void*))fClose)(stream, nullptr);
         int nA2 = *(int*)pNumAnims, nB2 = *(int*)pNumBlocks;
         LOGI("After: %d animations (+%d), %d blocks", nA2, nA2 - nA, nB2);
         for (int i = nA; i < nA2 && i < nA + 6; ++i)
