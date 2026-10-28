@@ -525,6 +525,15 @@ static void DieId_hook(void* self, int group, int animId, float blend, float spe
     g_DieIdOrig(self, group, animId, blend, speed);
 }
 
+typedef void (*DieComplex_t)(void*, int, int, int, float, float, bool, bool, int, bool);
+static DieComplex_t g_DieComplexOrig = nullptr;
+static void DieComplex_hook(void* self, int weapon, int group, int animId, float blend, float speed, bool a, bool b, int c, bool d)
+{
+    static int n = 0;
+    if (n < 200) { ++n; LOGI("DieComplex weapon=%d group=%d animId=%d blend=%.2f speed=%.2f flags=%d,%d,%d,%d", weapon, group, animId, blend, speed, (int)a, (int)b, c, (int)d); }
+    g_DieComplexOrig(self, weapon, group, animId, blend, speed, a, b, c, d);
+}
+
 // ---------------------------------------------------------------- hook
 
 static bool AddExplosion_hook(void* victim, void* creator, int type, CVector pos,
@@ -662,6 +671,9 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
         g_DieHierOrig = (DieHier_t)dHier;     // called directly, not hooked
         if (dStr) aml->Hook((void*)dStr, (void*)DieStr_hook, (void**)&g_DieStrOrig);
         if (dId)  aml->Hook((void*)dId,  (void*)DieId_hook,  (void**)&g_DieIdOrig);
+        uintptr_t dCx = ResolveExact("_ZN15CTaskComplexDieC2E11eWeaponType12AssocGroupId11AnimationIdffbbib");
+        LOGI("TaskComplexDie ctor=%p", (void*)dCx);
+        if (dCx) aml->Hook((void*)dCx, (void*)DieComplex_hook, (void**)&g_DieComplexOrig);
     }
     LOGI("Hook installed");
 }
