@@ -15,6 +15,8 @@
 #include <sys/stat.h>
 
 #include <cstdarg>
+#include <cstdint>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -329,6 +331,56 @@ static void HexDump(const char* label, const void* p, size_t n)
     LOGI("%s: %s", label, buf);
 }
 
+
+// ---- phase 3: replace the game's death animations with the ones from Death Anims.ifp
+#include <vector>
+#include <map>
+static std::map<std::string, std::vector<void*>> g_DeathAnims;   // "F" -> hierarchies F1, F2, ...
+static std::atomic<bool> g_DeathReady{false};
+
+typedef void (*DieCtorStr_t)(void* self, const char* anim, const char* group, int flags, float blend, float speed);
+typedef void (*DieCtorHier_t)(void* self, void* hierarchy, int flags, float blend, float speed);
+static DieCtorStr_t  g_DieCtorStrOrig = nullptr;
+static DieCtorHier_t g_DieCtorHier    = nullptr;
+
+// GTA's CKeyGen::GetUppercaseKey (CRC32 of the upper-cased name, no final xor)
+static uint32_t GtaKey(const char* s)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (; *s; ++s)
+    {
+        crc ^= (uint8_t)toupper((unsigned char)*s);
+        for (int i = 0; i < 8; ++i) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+    return crc;
+}
+
+static void DieCtorStr_hook(void* self, const char* anim, const char* group, int flags, float blend, float speed)
+{
+    if (g_DeathReady.load() && anim && g_DieCtorHier)
+    {
+        const char* pre = nullptr;
+        if      (!strcmp(anim, "KO_SKID_FRONT")) pre = "F";
+        else if (!strcmp(anim, "KO_SKID_BACK"))  pre = "B";
+        else if (!strcmp(anim, "KO_SPIN_L"))     pre = "L";
+        else if (!strcmp(anim, "KO_SPIN_R"))     pre = "R";
+        else if (!strcmp(anim, "KO_SHOT_FRONT")) pre = "SF";
+        if (pre)
+        {
+            auto it = g_DeathAnims.find(pre);
+            if (it != g_DeathAnims.end() && !it->second.empty())
+            {
+                size_t idx = (size_t)rand() % it->second.size();
+                static int s_logged = 0;
+                if (s_logged < 30) { ++s_logged; LOGI("Death replace %s -> %s%zu (flags=%d blend=%.2f speed=%.2f)", anim, pre, idx + 1, flags, blend, speed); }
+                g_DieCtorHier(self, it->second[idx], flags, blend, speed);
+                return;
+            }
+        }
+    }
+    g_DieCtorStrOrig(self, anim, group, flags, blend, speed);
+}
+
 typedef void (*LoadAnimFile_t)(const char* path);
 static std::atomic<bool> g_Phase2Done{false};
 
@@ -386,10 +438,25 @@ static void RunDeathPhase()
         ((int (*)(void*, void*))fClose)(stream, nullptr);
         int nA2 = *(int*)pNumAnims, nB2 = *(int*)pNumBlocks;
         LOGI("After: %d animations (+%d), %d blocks", nA2, nA2 - nA, nB2);
+        g_AnimsBase = pAnims; g_NewStart = nA; g_NewEnd = nA2;
         for (int i = nA; i < nA2 && i < nA + 6; ++i)
         {
             char lab[32]; snprintf(lab, sizeof(lab), "newanim[%d] raw(40)", i);
             HexDump(lab, (void*)(pAnims + (size_t)i * 40), 40);
+        }
+        if (g_DeathPhase >= 3)
+        {
+            static const char* const prefixes[] = {"F", "HF", "B", "HB", "SF", "H", "L", "R", nullptr};
+            for (int p = 0; prefixes[p]; ++p)
+                for (int i = 1; i <= 80; ++i)
+                {
+                    char nm[16]; snprintf(nm, sizeof(nm), "%s%d", prefixes[p], i);
+                    uint32_t h = GtaKey(nm);
+                    for (int k = nA; k < nA2; ++k)
+                        if (*(uint32_t*)(pAnims + (size_t)k * 40) == h) { g_DeathAnims[prefixes[p]].push_back((void*)(pAnims + (size_t)k * 40)); break; }
+                }
+            for (auto& kv : g_DeathAnims) LOGI("Death anims '%s': %zu found", kv.first.c_str(), kv.second.size());
+            g_DeathReady.store(true);
         }
     }
     LOGI("DeathPhase done");
@@ -406,6 +473,67 @@ static CVector FindPlayerCoors_hook(int id)
         RunDeathPhase();
     }
     return g_FindPlayerCoorsOrig(id);
+}
+
+
+// ---------------------------------------------------------------- death hooks (phase 3)
+
+static uintptr_t g_AnimsBase = 0;
+static int g_NewStart = 0, g_NewEnd = 0;   // range of hierarchies that came from Death Anims.ifp
+
+static uint32_t UpperCRC(const char* s)
+{
+    static uint32_t T[256]; static bool init = false;
+    if (!init) { for (uint32_t i = 0; i < 256; ++i) { uint32_t c = i; for (int k = 0; k < 8; ++k) c = (c & 1) ? (c >> 1) ^ 0xEDB88320u : c >> 1; T[i] = c; } init = true; }
+    uint32_t k = 0xFFFFFFFFu;
+    for (; *s; ++s) { unsigned char ch = (unsigned char)toupper((unsigned char)*s); k = T[(k ^ ch) & 0xFF] ^ (k >> 8); }
+    return k;
+}
+
+static void* FindNewAnim(const char* name)
+{
+    if (!g_AnimsBase || g_NewEnd <= g_NewStart) return nullptr;
+    uint32_t h = UpperCRC(name);
+    for (int i = g_NewStart; i < g_NewEnd; ++i)
+        if (*(uint32_t*)(g_AnimsBase + (size_t)i * 40) == h) return (void*)(g_AnimsBase + (size_t)i * 40);
+    return nullptr;
+}
+
+typedef void (*DieStr_t)(void*, const char*, const char*, int, float, float);
+typedef void (*DieHier_t)(void*, void*, int, float, float);
+typedef void (*DieId_t)(void*, int, int, float, float);
+static DieStr_t  g_DieStrOrig  = nullptr;
+static DieHier_t g_DieHierOrig = nullptr;   // hooked only for logging; also used to build the task
+static DieId_t   g_DieIdOrig   = nullptr;
+
+static void DieStr_hook(void* self, const char* grp, const char* anim, int flags, float blend, float speed)
+{
+    static int n = 0;
+    if (n < 40) { ++n; LOGI("DieStr group='%s' anim='%s' flags=%d blend=%.2f speed=%.2f", grp ? grp : "(null)", anim ? anim : "(null)", flags, blend, speed); }
+    const char* pre = nullptr; int cnt = 0;
+    if (anim)
+    {
+        if      (!strcmp(anim, "KO_SKID_FRONT")) { pre = "F";  cnt = 54; }
+        else if (!strcmp(anim, "KO_SKID_BACK"))  { pre = "B";  cnt = 21; }
+        else if (!strcmp(anim, "KO_SPIN_L"))     { pre = "L";  cnt = 13; }
+        else if (!strcmp(anim, "KO_SPIN_R"))     { pre = "R";  cnt = 13; }
+        else if (!strcmp(anim, "KO_SHOT_FRONT")) { pre = "SF"; cnt = 44; }
+    }
+    if (pre && g_DieHierOrig)
+    {
+        char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, 1 + rand() % cnt);
+        void* h = FindNewAnim(nm);
+        if (h) { LOGI("Replacing '%s' with '%s' (%p)", anim, nm, h); g_DieHierOrig(self, h, flags, blend, speed); return; }
+        LOGE("Anim %s not found", nm);
+    }
+    g_DieStrOrig(self, grp, anim, flags, blend, speed);
+}
+
+static void DieId_hook(void* self, int group, int animId, float blend, float speed)
+{
+    static int n = 0;
+    if (n < 60) { ++n; LOGI("DieId group=%d animId=%d blend=%.2f speed=%.2f", group, animId, blend, speed); }
+    g_DieIdOrig(self, group, animId, blend, speed);
 }
 
 // ---------------------------------------------------------------- hook
@@ -523,6 +651,19 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     uintptr_t player    = FindFunction(lib, playerNames,    "FindPlayerCoors");
     LOGI("AddExplosion=%p FindPlayerCoors=%p", (void*)explosion, (void*)player);
 
+    if (g_DeathPhase >= 3)
+    {
+        uintptr_t ctorStr  = ResolveExact("_ZN14CTaskSimpleDieC2EPKcS1_iff");
+        uintptr_t ctorHier = ResolveExact("_ZN14CTaskSimpleDieC2EP19CAnimBlendHierarchyiff");
+        LOGI("CTaskSimpleDie ctors: str=%p hier=%p", (void*)ctorStr, (void*)ctorHier);
+        if (ctorStr && ctorHier)
+        {
+            g_DieCtorHier = (DieCtorHier_t)ctorHier;
+            aml->Hook((void*)ctorStr, (void*)DieCtorStr_hook, (void**)&g_DieCtorStrOrig);
+            LOGI("Death ctor hook installed");
+        }
+    }
+
     // Start audio even if the hook fails, so the test sound still works
     std::thread(AudioThread).detach();
 
@@ -536,5 +677,15 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     aml->Hook((void*)player, (void*)FindPlayerCoors_hook, (void**)&g_FindPlayerCoorsOrig);
     g_FindPlayerCoors = g_FindPlayerCoorsOrig;   // our own calls bypass the hook
     aml->Hook((void*)explosion, (void*)AddExplosion_hook, (void**)&g_AddExplosionOrig);
+    if (g_DeathPhase >= 3)
+    {
+        uintptr_t dStr  = ResolveExact("_ZN14CTaskSimpleDieC2EPKcS1_iff");
+        uintptr_t dHier = ResolveExact("_ZN14CTaskSimpleDieC2EP19CAnimBlendHierarchyiff");
+        uintptr_t dId   = ResolveExact("_ZN14CTaskSimpleDieC2E12AssocGroupId11AnimationIdff");
+        LOGI("TaskSimpleDie ctors: str=%p hier=%p id=%p", (void*)dStr, (void*)dHier, (void*)dId);
+        g_DieHierOrig = (DieHier_t)dHier;     // called directly, not hooked
+        if (dStr) aml->Hook((void*)dStr, (void*)DieStr_hook, (void**)&g_DieStrOrig);
+        if (dId)  aml->Hook((void*)dId,  (void*)DieId_hook,  (void**)&g_DieIdOrig);
+    }
     LOGI("Hook installed");
 }
