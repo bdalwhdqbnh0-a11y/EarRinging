@@ -65,7 +65,9 @@ static float g_Volume      = 1.0f;
 static float g_MinDistance = 15.0f;
 static float g_FadeSeconds = 6.0f;
 static int   g_TestOnLoad  = 1;   // play a short test ringing when the audio is ready
-static int   g_DeathFlags  = 4;   // animation flags for replaced deaths (4=freeze last frame, 8=unlock)
+static int   g_DeathFlags  = -1;  // -1 = copy the flags the game uses for the original animation  // animation flags for replaced deaths (4=freeze last frame, 8=unlock)
+static int   g_ForceStart  = 1;   // call Start() on the replaced animation
+static int   g_PlayerDeath = 1;   // 1 = also replace the player's own death animation
 static int   g_DeathPhase  = 0;   // 0 = off, 1 = just find symbols, 2 = also load "Death Anims.ifp"
 
 static std::string g_Dir;                 // .../Android/data/<pkg>/files/EarRinging/
@@ -136,6 +138,8 @@ static void LoadConfig()
         else if (key == "FadeSeconds") g_FadeSeconds = val;
         else if (key == "TestOnLoad")  g_TestOnLoad  = (int)val;
         else if (key == "DeathPhase")  g_DeathPhase  = (int)val;
+        else if (key == "ForceStart")  g_ForceStart  = (int)val;
+        else if (key == "PlayerDeath") g_PlayerDeath = (int)val;
         else if (key == "DeathFlags")  g_DeathFlags  = (int)val;
     }
     fclose(f);
@@ -475,23 +479,22 @@ static void DieStr_hook(void* self, const char* grp, const char* anim, int flags
 
 // Which death animation name (KO_...) does this (group, animId) stand for?  Find out by looking at the
 // game's own association object: it points to a hierarchy whose first 4 bytes are the CRC32 of the name.
+static uintptr_t g_GetAssoc = 0;
 static const char* AnimNameFromId(int group, int animId)
 {
     static const char* const names[] = { "KO_SKID_FRONT", "KO_SKID_BACK", "KO_SPIN_L", "KO_SPIN_R", "KO_SHOT_FRONT",
         "KO_SHOT_STOM", "KO_SHOT_ARM_L", "KO_SHOT_ARM_R", "KO_SHOT_LEG_L", "KO_SHOT_LEG_R", "KO_SHOT_FACE", "KO_SHOT_PARTIAL",
         "KO_SHOT_FRONT_0", "KO_SHOT_STOM_0", "FLOOR_HIT", "FLOOR_HIT_F", "BIKE_FALL_OFF", "KD_LEFT", "KD_RIGHT",
         "KO_SPIN_FORWARD", "KO_SPIN_BACK", "DAM_STOMACH", "KO_SKID_FRONT_0", "KO_SKID_BACK_0", "DEAD_FALL", "SHOT_FRONT", nullptr };
-    static uintptr_t fGet = ResolveExact("_ZN12CAnimManager18GetAnimAssociationE12AssocGroupId11AnimationId");
+    uintptr_t& fGet = g_GetAssoc; if (!fGet) fGet = ResolveExact("_ZN12CAnimManager18GetAnimAssociationE12AssocGroupId11AnimationId");
     if (!fGet || !g_AnimsBase) return nullptr;
     void* assoc = ((void* (*)(int, int))fGet)(group, animId);
     if (!assoc) { LOGI("  assoc(%d,%d) = null", group, animId); return nullptr; }
-    HexDump("  assoc raw(64)", assoc, 64);
     for (int off = 0; off < 64; off += 8)
     {
         uintptr_t p = *(uintptr_t*)((uintptr_t)assoc + off);
         if (p < g_AnimsBase || p >= g_AnimsBase + 2500 * 40 || (p - g_AnimsBase) % 40) continue;
         uint32_t h = *(uint32_t*)p;
-        LOGI("  hierarchy at +%d hash=%08X", off, h);
         for (int k = 0; names[k]; ++k) if (UpperCRC(names[k]) == h) return names[k];
     }
     return nullptr;
@@ -569,6 +572,18 @@ typedef void* (*BlendAnimHier_t)(void* clump, void* hier, int flags, float blend
 static BlendAnimId_t   g_BlendIdOrig   = nullptr;
 static BlendAnimHier_t g_BlendHierOrig = nullptr;
 
+static uintptr_t g_FindPlayerPed = 0;
+// Is this clump the player's? (find the clump pointer inside the player ped object)
+static bool IsPlayerClump(void* clump)
+{
+    if (!g_FindPlayerPed) return false;
+    void* ped = ((void* (*)(int))g_FindPlayerPed)(-1);
+    if (!ped) return false;
+    for (int off = 0; off < 0x100; off += 8)
+        if (*(void**)((uintptr_t)ped + off) == clump) return true;
+    return false;
+}
+
 static void* BlendId_hook(void* clump, int group, int id, float blend)
 {
     if (g_DeathId.load() == id && g_DeathGroup.load() == group && NowMs() < g_DeathExpire.load() && g_BlendHierOrig)
@@ -576,13 +591,32 @@ static void* BlendId_hook(void* clump, int group, int id, float blend)
         const char* pre; int cnt;
         if (PickPrefix(CachedAnimName(group, id), &pre, &cnt))
         {
+            if (!g_PlayerDeath && IsPlayerClump(clump))
+            {
+                g_DeathId = -1;
+                LOGI("BlendAnimation: player death left alone (PlayerDeath=0)");
+                return g_BlendIdOrig(clump, group, id, blend);
+            }
             char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, 1 + rand() % cnt);
             void* h = FindNewAnim(nm);
             if (h)
             {
                 g_DeathId = -1;   // replace once per death
-                LOGI("BlendAnimation: replacing id %d with %s", id, nm);
-                return g_BlendHierOrig(clump, h, g_DeathFlags, blend);
+                // Play the new animation with the same flags the game itself uses for the original one
+                // (this keeps root translation/rotation, so the body really falls instead of twisting in place).
+                int flags = g_DeathFlags;
+                if (g_GetAssoc)
+                {
+                    void* assoc = ((void* (*)(int, int))g_GetAssoc)(group, id);
+                    if (assoc) flags |= (int)*(uint16_t*)((uintptr_t)assoc + 14);
+                }
+                bool pl = IsPlayerClump(clump);
+                LOGI("BlendAnimation: replacing id %d with %s flags=0x%X%s", id, nm, flags, pl ? " (player)" : "");
+                void* assoc2 = g_BlendHierOrig(clump, h, flags, blend);
+                // make sure the new animation is really running (a stuck first frame looks like a frozen pose)
+                static uintptr_t fStart = ResolveExact("_ZN21CAnimBlendAssociation5StartEf");
+                if (assoc2 && fStart && g_ForceStart) ((void (*)(void*, float))fStart)(assoc2, 0.0f);
+                return assoc2;
             }
         }
     }
@@ -732,6 +766,8 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
         uintptr_t bHier = ResolveExact("_ZN12CAnimManager14BlendAnimationEP7RpClumpP19CAnimBlendHierarchyif");
         LOGI("BlendAnimation id=%p hier=%p", (void*)bId, (void*)bHier);
         g_BlendHierOrig = (BlendAnimHier_t)bHier;
+        g_FindPlayerPed = ResolveExact("_Z13FindPlayerPedi");
+        LOGI("FindPlayerPed=%p", (void*)g_FindPlayerPed);
         if (bId && bHier) aml->Hook((void*)bId, (void*)BlendId_hook, (void**)&g_BlendIdOrig);
         if (dCx) aml->Hook((void*)dCx, (void*)DieComplex_hook, (void**)&g_DieComplexOrig);
     }
