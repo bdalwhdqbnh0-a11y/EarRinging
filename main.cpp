@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 
 #include <cstdarg>
+#include <map>
 #include <cstdint>
 #include <cctype>
 #include <atomic>
@@ -64,6 +65,7 @@ static float g_Volume      = 1.0f;
 static float g_MinDistance = 15.0f;
 static float g_FadeSeconds = 6.0f;
 static int   g_TestOnLoad  = 1;   // play a short test ringing when the audio is ready
+static int   g_DeathFlags  = 12;  // animation flags for replaced deaths (4=freeze last frame, 8=unlock)
 static int   g_DeathPhase  = 0;   // 0 = off, 1 = just find symbols, 2 = also load "Death Anims.ifp"
 
 static std::string g_Dir;                 // .../Android/data/<pkg>/files/EarRinging/
@@ -134,6 +136,7 @@ static void LoadConfig()
         else if (key == "FadeSeconds") g_FadeSeconds = val;
         else if (key == "TestOnLoad")  g_TestOnLoad  = (int)val;
         else if (key == "DeathPhase")  g_DeathPhase  = (int)val;
+        else if (key == "DeathFlags")  g_DeathFlags  = (int)val;
     }
     fclose(f);
     if (g_Volume < 0.0f) g_Volume = 0.0f;
@@ -335,52 +338,6 @@ static void HexDump(const char* label, const void* p, size_t n)
 // ---- phase 3: replace the game's death animations with the ones from Death Anims.ifp
 #include <vector>
 #include <map>
-static std::map<std::string, std::vector<void*>> g_DeathAnims;   // "F" -> hierarchies F1, F2, ...
-static std::atomic<bool> g_DeathReady{false};
-
-typedef void (*DieCtorStr_t)(void* self, const char* anim, const char* group, int flags, float blend, float speed);
-typedef void (*DieCtorHier_t)(void* self, void* hierarchy, int flags, float blend, float speed);
-static DieCtorStr_t  g_DieCtorStrOrig = nullptr;
-static DieCtorHier_t g_DieCtorHier    = nullptr;
-
-// GTA's CKeyGen::GetUppercaseKey (CRC32 of the upper-cased name, no final xor)
-static uint32_t GtaKey(const char* s)
-{
-    uint32_t crc = 0xFFFFFFFFu;
-    for (; *s; ++s)
-    {
-        crc ^= (uint8_t)toupper((unsigned char)*s);
-        for (int i = 0; i < 8; ++i) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
-    }
-    return crc;
-}
-
-static void DieCtorStr_hook(void* self, const char* anim, const char* group, int flags, float blend, float speed)
-{
-    if (g_DeathReady.load() && anim && g_DieCtorHier)
-    {
-        const char* pre = nullptr;
-        if      (!strcmp(anim, "KO_SKID_FRONT")) pre = "F";
-        else if (!strcmp(anim, "KO_SKID_BACK"))  pre = "B";
-        else if (!strcmp(anim, "KO_SPIN_L"))     pre = "L";
-        else if (!strcmp(anim, "KO_SPIN_R"))     pre = "R";
-        else if (!strcmp(anim, "KO_SHOT_FRONT")) pre = "SF";
-        if (pre)
-        {
-            auto it = g_DeathAnims.find(pre);
-            if (it != g_DeathAnims.end() && !it->second.empty())
-            {
-                size_t idx = (size_t)rand() % it->second.size();
-                static int s_logged = 0;
-                if (s_logged < 30) { ++s_logged; LOGI("Death replace %s -> %s%zu (flags=%d blend=%.2f speed=%.2f)", anim, pre, idx + 1, flags, blend, speed); }
-                g_DieCtorHier(self, it->second[idx], flags, blend, speed);
-                return;
-            }
-        }
-    }
-    g_DieCtorStrOrig(self, anim, group, flags, blend, speed);
-}
-
 static uintptr_t g_AnimsBase = 0;
 static int g_NewStart = 0, g_NewEnd = 0;   // range of hierarchies that came from Death Anims.ifp
 typedef void (*LoadAnimFile_t)(const char* path);
@@ -400,6 +357,7 @@ static void RunDeathPhase()
          (void*)pNumAnims, (void*)pNumBlocks, (void*)pAnims, (void*)pBlocks, (void*)pPedPool, (void*)fLoad);
     if (!pNumAnims || !pNumBlocks || !pAnims || !pBlocks) { LOGE("Anim globals missing"); return; }
 
+    g_AnimsBase = pAnims;
     int nA = *(int*)pNumAnims, nB = *(int*)pNumBlocks;
     LOGI("Before: %d animations, %d blocks", nA, nB);
     for (int i = 0; i < 4; ++i)
@@ -445,20 +403,6 @@ static void RunDeathPhase()
         {
             char lab[32]; snprintf(lab, sizeof(lab), "newanim[%d] raw(40)", i);
             HexDump(lab, (void*)(pAnims + (size_t)i * 40), 40);
-        }
-        if (g_DeathPhase >= 3)
-        {
-            static const char* const prefixes[] = {"F", "HF", "B", "HB", "SF", "H", "L", "R", nullptr};
-            for (int p = 0; prefixes[p]; ++p)
-                for (int i = 1; i <= 80; ++i)
-                {
-                    char nm[16]; snprintf(nm, sizeof(nm), "%s%d", prefixes[p], i);
-                    uint32_t h = GtaKey(nm);
-                    for (int k = nA; k < nA2; ++k)
-                        if (*(uint32_t*)(pAnims + (size_t)k * 40) == h) { g_DeathAnims[prefixes[p]].push_back((void*)(pAnims + (size_t)k * 40)); break; }
-                }
-            for (auto& kv : g_DeathAnims) LOGI("Death anims '%s': %zu found", kv.first.c_str(), kv.second.size());
-            g_DeathReady.store(true);
         }
     }
     LOGI("DeathPhase done");
@@ -529,10 +473,50 @@ static void DieStr_hook(void* self, const char* grp, const char* anim, int flags
     g_DieStrOrig(self, grp, anim, flags, blend, speed);
 }
 
+// Which death animation name (KO_...) does this (group, animId) stand for?  Find out by looking at the
+// game's own association object: it points to a hierarchy whose first 4 bytes are the CRC32 of the name.
+static const char* AnimNameFromId(int group, int animId)
+{
+    static const char* const names[] = { "KO_SKID_FRONT", "KO_SKID_BACK", "KO_SPIN_L", "KO_SPIN_R", "KO_SHOT_FRONT", nullptr };
+    static uintptr_t fGet = ResolveExact("_ZN12CAnimManager18GetAnimAssociationE12AssocGroupId11AnimationId");
+    if (!fGet || !g_AnimsBase) return nullptr;
+    void* assoc = ((void* (*)(int, int))fGet)(group, animId);
+    if (!assoc) return nullptr;
+    for (int off = 0; off < 64; off += 8)
+    {
+        uintptr_t p = *(uintptr_t*)((uintptr_t)assoc + off);
+        if (p < g_AnimsBase || p >= g_AnimsBase + 2500 * 40 || (p - g_AnimsBase) % 40) continue;
+        uint32_t h = *(uint32_t*)p;
+        for (int k = 0; names[k]; ++k) if (UpperCRC(names[k]) == h) return names[k];
+    }
+    return nullptr;
+}
+
 static void DieId_hook(void* self, int group, int animId, float blend, float speed)
 {
     static int n = 0;
-    if (n < 60) { ++n; LOGI("DieId group=%d animId=%d blend=%.2f speed=%.2f", group, animId, blend, speed); }
+    static std::map<int, const char*> cache;   // key = group*10000+animId
+    int key = group * 10000 + animId;
+    auto it = cache.find(key);
+    if (it == cache.end()) it = cache.emplace(key, AnimNameFromId(group, animId)).first;
+    const char* anim = it->second;
+    if (n < 60) { ++n; LOGI("DieId group=%d animId=%d -> %s blend=%.2f speed=%.2f", group, animId, anim ? anim : "(other)", blend, speed); }
+
+    const char* pre = nullptr; int cnt = 0;
+    if (anim)
+    {
+        if      (!strcmp(anim, "KO_SKID_FRONT")) { pre = "F";  cnt = 54; }
+        else if (!strcmp(anim, "KO_SKID_BACK"))  { pre = "B";  cnt = 21; }
+        else if (!strcmp(anim, "KO_SPIN_L"))     { pre = "L";  cnt = 13; }
+        else if (!strcmp(anim, "KO_SPIN_R"))     { pre = "R";  cnt = 13; }
+        else if (!strcmp(anim, "KO_SHOT_FRONT")) { pre = "SF"; cnt = 44; }
+    }
+    if (pre && g_DieHierOrig)
+    {
+        char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, 1 + rand() % cnt);
+        void* h = FindNewAnim(nm);
+        if (h) { LOGI("Replacing %s with %s", anim, nm); g_DieHierOrig(self, h, g_DeathFlags, 4.0f, 1.0f); return; }
+    }
     g_DieIdOrig(self, group, animId, blend, speed);
 }
 
@@ -650,19 +634,6 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     uintptr_t explosion = FindFunction(lib, explosionNames, "10CExplosion12AddExplosion");
     uintptr_t player    = FindFunction(lib, playerNames,    "FindPlayerCoors");
     LOGI("AddExplosion=%p FindPlayerCoors=%p", (void*)explosion, (void*)player);
-
-    if (g_DeathPhase >= 3)
-    {
-        uintptr_t ctorStr  = ResolveExact("_ZN14CTaskSimpleDieC2EPKcS1_iff");
-        uintptr_t ctorHier = ResolveExact("_ZN14CTaskSimpleDieC2EP19CAnimBlendHierarchyiff");
-        LOGI("CTaskSimpleDie ctors: str=%p hier=%p", (void*)ctorStr, (void*)ctorHier);
-        if (ctorStr && ctorHier)
-        {
-            g_DieCtorHier = (DieCtorHier_t)ctorHier;
-            aml->Hook((void*)ctorStr, (void*)DieCtorStr_hook, (void**)&g_DieCtorStrOrig);
-            LOGI("Death ctor hook installed");
-        }
-    }
 
     // Start audio even if the hook fails, so the test sound still works
     std::thread(AudioThread).detach();
