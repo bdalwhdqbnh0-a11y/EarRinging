@@ -381,6 +381,8 @@ static void DieCtorStr_hook(void* self, const char* anim, const char* group, int
     g_DieCtorStrOrig(self, anim, group, flags, blend, speed);
 }
 
+static uintptr_t g_AnimsBase = 0;
+static int g_NewStart = 0, g_NewEnd = 0;   // range of hierarchies that came from Death Anims.ifp
 typedef void (*LoadAnimFile_t)(const char* path);
 static std::atomic<bool> g_Phase2Done{false};
 
@@ -478,8 +480,6 @@ static CVector FindPlayerCoors_hook(int id)
 
 // ---------------------------------------------------------------- death hooks (phase 3)
 
-static uintptr_t g_AnimsBase = 0;
-static int g_NewStart = 0, g_NewEnd = 0;   // range of hierarchies that came from Death Anims.ifp
 
 static uint32_t UpperCRC(const char* s)
 {
