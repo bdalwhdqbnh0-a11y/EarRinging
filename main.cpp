@@ -65,7 +65,7 @@ static float g_Volume      = 1.0f;
 static float g_MinDistance = 15.0f;
 static float g_FadeSeconds = 6.0f;
 static int   g_TestOnLoad  = 1;   // play a short test ringing when the audio is ready
-static int   g_DeathFlags  = 12;  // animation flags for replaced deaths (4=freeze last frame, 8=unlock)
+static int   g_DeathFlags  = 4;   // animation flags for replaced deaths (4=freeze last frame, 8=unlock)
 static int   g_DeathPhase  = 0;   // 0 = off, 1 = just find symbols, 2 = also load "Death Anims.ifp"
 
 static std::string g_Dir;                 // .../Android/data/<pkg>/files/EarRinging/
@@ -497,6 +497,27 @@ static const char* AnimNameFromId(int group, int animId)
     return nullptr;
 }
 
+static const char* CachedAnimName(int group, int animId)
+{
+    static std::map<int, const char*> cache2;
+    int key = group * 10000 + animId;
+    auto it = cache2.find(key);
+    if (it == cache2.end()) it = cache2.emplace(key, AnimNameFromId(group, animId)).first;
+    return it->second;
+}
+
+static bool PickPrefix(const char* anim, const char** pre, int* cnt)
+{
+    if (!anim) return false;
+    if      (!strcmp(anim, "KO_SKID_FRONT")) { *pre = "F";  *cnt = 54; }
+    else if (!strcmp(anim, "KO_SKID_BACK"))  { *pre = "B";  *cnt = 21; }
+    else if (!strcmp(anim, "KO_SPIN_L"))     { *pre = "L";  *cnt = 13; }
+    else if (!strcmp(anim, "KO_SPIN_R"))     { *pre = "R";  *cnt = 13; }
+    else if (!strcmp(anim, "KO_SHOT_FRONT")) { *pre = "SF"; *cnt = 44; }
+    else return false;
+    return true;
+}
+
 static void DieId_hook(void* self, int group, int animId, float blend, float speed)
 {
     static int n = 0;
@@ -527,11 +548,45 @@ static void DieId_hook(void* self, int group, int animId, float blend, float spe
 
 typedef void (*DieComplex_t)(void*, int, int, int, float, float, bool, bool, int, bool);
 static DieComplex_t g_DieComplexOrig = nullptr;
+
+// The ped that is about to die: remember which animation the game picked (valid for ~2 seconds).
+static std::atomic<int> g_DeathGroup{-1}, g_DeathId{-1};
+static std::atomic<long long> g_DeathExpire{0};
+static long long NowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
 static void DieComplex_hook(void* self, int weapon, int group, int animId, float blend, float speed, bool a, bool b, int c, bool d)
 {
     static int n = 0;
-    if (n < 200) { ++n; LOGI("DieComplex weapon=%d group=%d animId=%d blend=%.2f speed=%.2f flags=%d,%d,%d,%d", weapon, group, animId, blend, speed, (int)a, (int)b, c, (int)d); }
+    const char* name = CachedAnimName(group, animId);
+    if (n < 200) { ++n; LOGI("DieComplex weapon=%d group=%d animId=%d -> %s blend=%.2f speed=%.2f", weapon, group, animId, name ? name : "(other)", blend, speed); }
+    const char* pre; int cnt;
+    if (PickPrefix(name, &pre, &cnt)) { g_DeathGroup = group; g_DeathId = animId; g_DeathExpire = NowMs() + 2000; }
     g_DieComplexOrig(self, weapon, group, animId, blend, speed, a, b, c, d);
+}
+
+typedef void* (*BlendAnimId_t)(void* clump, int group, int id, float blend);
+typedef void* (*BlendAnimHier_t)(void* clump, void* hier, int flags, float blend);
+static BlendAnimId_t   g_BlendIdOrig   = nullptr;
+static BlendAnimHier_t g_BlendHierOrig = nullptr;
+
+static void* BlendId_hook(void* clump, int group, int id, float blend)
+{
+    if (g_DeathId.load() == id && g_DeathGroup.load() == group && NowMs() < g_DeathExpire.load() && g_BlendHierOrig)
+    {
+        const char* pre; int cnt;
+        if (PickPrefix(CachedAnimName(group, id), &pre, &cnt))
+        {
+            char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, 1 + rand() % cnt);
+            void* h = FindNewAnim(nm);
+            if (h)
+            {
+                g_DeathId = -1;   // replace once per death
+                LOGI("BlendAnimation: replacing id %d with %s", id, nm);
+                return g_BlendHierOrig(clump, h, g_DeathFlags, blend);
+            }
+        }
+    }
+    return g_BlendIdOrig(clump, group, id, blend);
 }
 
 // ---------------------------------------------------------------- hook
@@ -673,6 +728,11 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
         if (dId)  aml->Hook((void*)dId,  (void*)DieId_hook,  (void**)&g_DieIdOrig);
         uintptr_t dCx = ResolveExact("_ZN15CTaskComplexDieC2E11eWeaponType12AssocGroupId11AnimationIdffbbib");
         LOGI("TaskComplexDie ctor=%p", (void*)dCx);
+        uintptr_t bId   = ResolveExact("_ZN12CAnimManager14BlendAnimationEP7RpClump12AssocGroupId11AnimationIdf");
+        uintptr_t bHier = ResolveExact("_ZN12CAnimManager14BlendAnimationEP7RpClumpP19CAnimBlendHierarchyif");
+        LOGI("BlendAnimation id=%p hier=%p", (void*)bId, (void*)bHier);
+        g_BlendHierOrig = (BlendAnimHier_t)bHier;
+        if (bId && bHier) aml->Hook((void*)bId, (void*)BlendId_hook, (void**)&g_BlendIdOrig);
         if (dCx) aml->Hook((void*)dCx, (void*)DieComplex_hook, (void**)&g_DieComplexOrig);
     }
     LOGI("Hook installed");
