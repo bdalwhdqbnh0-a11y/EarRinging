@@ -604,7 +604,7 @@ static void* BlendId_hook(void* clump, int group, int id, float blend)
                 g_DeathId = -1;   // replace once per death
                 // Play the new animation with the same flags the game itself uses for the original one
                 // (this keeps root translation/rotation, so the body really falls instead of twisting in place).
-                int flags = g_DeathFlags;
+                int flags = (g_DeathFlags < 0) ? 0 : g_DeathFlags;   // -1 = use only the game's own flags
                 if (g_GetAssoc)
                 {
                     void* assoc = ((void* (*)(int, int))g_GetAssoc)(group, id);
