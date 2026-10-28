@@ -477,16 +477,21 @@ static void DieStr_hook(void* self, const char* grp, const char* anim, int flags
 // game's own association object: it points to a hierarchy whose first 4 bytes are the CRC32 of the name.
 static const char* AnimNameFromId(int group, int animId)
 {
-    static const char* const names[] = { "KO_SKID_FRONT", "KO_SKID_BACK", "KO_SPIN_L", "KO_SPIN_R", "KO_SHOT_FRONT", nullptr };
+    static const char* const names[] = { "KO_SKID_FRONT", "KO_SKID_BACK", "KO_SPIN_L", "KO_SPIN_R", "KO_SHOT_FRONT",
+        "KO_SHOT_STOM", "KO_SHOT_ARM_L", "KO_SHOT_ARM_R", "KO_SHOT_LEG_L", "KO_SHOT_LEG_R", "KO_SHOT_FACE", "KO_SHOT_PARTIAL",
+        "KO_SHOT_FRONT_0", "KO_SHOT_STOM_0", "FLOOR_HIT", "FLOOR_HIT_F", "BIKE_FALL_OFF", "KD_LEFT", "KD_RIGHT",
+        "KO_SPIN_FORWARD", "KO_SPIN_BACK", "DAM_STOMACH", "KO_SKID_FRONT_0", "KO_SKID_BACK_0", "DEAD_FALL", "SHOT_FRONT", nullptr };
     static uintptr_t fGet = ResolveExact("_ZN12CAnimManager18GetAnimAssociationE12AssocGroupId11AnimationId");
     if (!fGet || !g_AnimsBase) return nullptr;
     void* assoc = ((void* (*)(int, int))fGet)(group, animId);
-    if (!assoc) return nullptr;
+    if (!assoc) { LOGI("  assoc(%d,%d) = null", group, animId); return nullptr; }
+    HexDump("  assoc raw(64)", assoc, 64);
     for (int off = 0; off < 64; off += 8)
     {
         uintptr_t p = *(uintptr_t*)((uintptr_t)assoc + off);
         if (p < g_AnimsBase || p >= g_AnimsBase + 2500 * 40 || (p - g_AnimsBase) % 40) continue;
         uint32_t h = *(uint32_t*)p;
+        LOGI("  hierarchy at +%d hash=%08X", off, h);
         for (int k = 0; names[k]; ++k) if (UpperCRC(names[k]) == h) return names[k];
     }
     return nullptr;
@@ -500,7 +505,7 @@ static void DieId_hook(void* self, int group, int animId, float blend, float spe
     auto it = cache.find(key);
     if (it == cache.end()) it = cache.emplace(key, AnimNameFromId(group, animId)).first;
     const char* anim = it->second;
-    if (n < 60) { ++n; LOGI("DieId group=%d animId=%d -> %s blend=%.2f speed=%.2f", group, animId, anim ? anim : "(other)", blend, speed); }
+    if (n < 200) { ++n; LOGI("DieId group=%d animId=%d -> %s blend=%.2f speed=%.2f", group, animId, anim ? anim : "(other)", blend, speed); }
 
     const char* pre = nullptr; int cnt = 0;
     if (anim)
