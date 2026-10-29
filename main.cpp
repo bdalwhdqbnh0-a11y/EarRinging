@@ -67,6 +67,7 @@ static float g_FadeSeconds = 6.0f;
 static int   g_TestOnLoad  = 1;   // play a short test ringing when the audio is ready
 static int   g_DeathFlags  = -1;  // -1 = copy the flags the game uses for the original animation  // animation flags for replaced deaths (4=freeze last frame, 8=unlock)
 static int   g_ForceStart  = 1;   // call Start() on the replaced animation
+static std::string g_ForceAnim;       // test: every replaced death uses this exact animation (e.g. F10)
 static float g_HeadMax     = 30.0f;  // headshot uses H* only if the hit strength is below this (original mod: 30)
 static float g_StrongHit   = 200.0f; // HF*/HB* only if the hit strength is above this (original mod: 200)
 static int   g_PlayerDeath = 1;   // 1 = also replace the player's own death animation
@@ -135,6 +136,13 @@ static void LoadConfig()
         *eq = 0;
         std::string key = line;
         float val = (float)atof(eq + 1);
+        if (std::string(line) == "ForceAnim")
+        {
+            std::string v = eq + 1;
+            while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' ')) v.pop_back();
+            g_ForceAnim = v;
+            continue;
+        }
         if      (key == "Volume")      g_Volume      = val;
         else if (key == "MinDistance") g_MinDistance = val;
         else if (key == "FadeSeconds") g_FadeSeconds = val;
@@ -645,6 +653,7 @@ static void* BlendId_hook(void* clump, int group, int id, float blend)
             if (have > 0) cnt = have;
             char nm[16]; void* h = nullptr;
             for (int t = 0; t < 8 && !h; ++t) { snprintf(nm, sizeof(nm), "%s%d", pre, 1 + rand() % cnt); h = FindNewAnim(nm); }
+            if (!g_ForceAnim.empty()) { snprintf(nm, sizeof(nm), "%.15s", g_ForceAnim.c_str()); h = FindNewAnim(nm); }
             if (h)
             {
                 g_DeathId = -1;   // replace once per death
