@@ -553,7 +553,11 @@ typedef void (*DieComplex_t)(void*, int, int, int, float, float, bool, bool, int
 static DieComplex_t g_DieComplexOrig = nullptr;
 
 // The ped that is about to die: remember which animation the game picked (valid for ~2 seconds).
-static std::atomic<int> g_DeathGroup{-1}, g_DeathId{-1};
+// damage-event data captured by ComputeDeathAnim_hook (defined below)
+static int   g_EvBone = -1;
+static float g_EvInt  = 0.0f;
+static bool  g_EvValid = false;
+static std::atomic<int> g_DeathGroup{-1}, g_DeathId{-1}, g_DeathVariant{0};
 static std::atomic<long long> g_DeathExpire{0};
 static long long NowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -563,7 +567,21 @@ static void DieComplex_hook(void* self, int weapon, int group, int animId, float
     const char* name = CachedAnimName(group, animId);
     if (n < 200) { ++n; LOGI("DieComplex weapon=%d group=%d animId=%d -> %s blend=%.2f speed=%.2f", weapon, group, animId, name ? name : "(other)", blend, speed); }
     const char* pre; int cnt;
-    if (PickPrefix(name, &pre, &cnt)) { g_DeathGroup = group; g_DeathId = animId; g_DeathExpire = NowMs() + 2000; }
+    if (PickPrefix(name, &pre, &cnt))
+    {
+        g_DeathGroup = group; g_DeathId = animId; g_DeathExpire = NowMs() + 2000;
+        // same rules as the original CLEO mod
+        int variant = 0;
+        if (g_EvValid)
+        {
+            if      (!strcmp(name, "KO_SHOT_FRONT") && g_EvBone == 9 && g_EvInt < 30.0f) variant = 1;   // H*  headshot
+            else if (!strcmp(name, "KO_SKID_FRONT") && g_EvInt > 200.0f)                 variant = 2;   // HF* strong hit from the front
+            else if (!strcmp(name, "KO_SKID_BACK")  && g_EvInt > 200.0f)                 variant = 3;   // HB* strong hit from behind
+        }
+        g_DeathVariant = variant;
+        if (variant) LOGI("  special death variant %d (bone=%d intensity=%.1f)", variant, g_EvBone, g_EvInt);
+    }
+    g_EvValid = false;
     g_DieComplexOrig(self, weapon, group, animId, blend, speed, a, b, c, d);
 }
 
@@ -571,6 +589,18 @@ typedef void* (*BlendAnimId_t)(void* clump, int group, int id, float blend);
 typedef void* (*BlendAnimHier_t)(void* clump, void* hier, int flags, float blend);
 static BlendAnimId_t   g_BlendIdOrig   = nullptr;
 static BlendAnimHier_t g_BlendHierOrig = nullptr;
+
+// How many animations "<prefix>1..N" does the loaded IFP really contain?
+static int CountOf(const char* pre)
+{
+    static std::map<std::string, int> cache;
+    auto it = cache.find(pre);
+    if (it != cache.end()) return it->second;
+    int mx = 0;
+    for (int i = 1; i <= 150; ++i) { char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, i); if (FindNewAnim(nm)) mx = i; }
+    if (g_NewEnd > g_NewStart) cache[pre] = mx;   // only cache once the IFP is loaded
+    return mx;
+}
 
 static uintptr_t g_FindPlayerPed = 0;
 // Is this clump the player's? (find the clump pointer inside the player ped object)
@@ -597,8 +627,12 @@ static void* BlendId_hook(void* clump, int group, int id, float blend)
                 LOGI("BlendAnimation: player death left alone (PlayerDeath=0)");
                 return g_BlendIdOrig(clump, group, id, blend);
             }
-            char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, 1 + rand() % cnt);
-            void* h = FindNewAnim(nm);
+            int variant = g_DeathVariant.exchange(0);
+            if (variant) { const char* vp = variant == 1 ? "H" : variant == 2 ? "HF" : "HB"; if (CountOf(vp) > 0) pre = vp; }
+            int have = CountOf(pre);
+            if (have > 0) cnt = have;
+            char nm[16]; void* h = nullptr;
+            for (int t = 0; t < 8 && !h; ++t) { snprintf(nm, sizeof(nm), "%s%d", pre, 1 + rand() % cnt); h = FindNewAnim(nm); }
             if (h)
             {
                 g_DeathId = -1;   // replace once per death
@@ -625,10 +659,15 @@ static void* BlendId_hook(void* clump, int group, int id, float blend)
 
 typedef void (*ComputeDeathAnim_t)(void* ev, void* ped, bool b);
 static ComputeDeathAnim_t g_ComputeDeathOrig = nullptr;
+// Layout of CEventDamage on this arm64 build (found from the logged dumps):
+//   +36 int weapon type, +40 int body part (9 = head), +64 float damage intensity
 static void ComputeDeathAnim_hook(void* ev, void* ped, bool b)
 {
+    g_EvBone = *(int*)((uintptr_t)ev + 40);
+    g_EvInt  = *(float*)((uintptr_t)ev + 64);
+    g_EvValid = (g_EvBone >= 0 && g_EvBone < 32 && g_EvInt == g_EvInt && g_EvInt >= 0.0f && g_EvInt < 100000.0f);
     static int n = 0;
-    if (n < 40) { ++n; char lab[48]; snprintf(lab, sizeof(lab), "DamageEvent #%d raw(112)", n); HexDump(lab, ev, 112); }
+    if (n < 40) { ++n; LOGI("DamageEvent #%d bone=%d intensity=%.1f", n, g_EvBone, g_EvInt); }
     g_ComputeDeathOrig(ev, ped, b);
 }
 
