@@ -67,6 +67,8 @@ static float g_FadeSeconds = 6.0f;
 static int   g_TestOnLoad  = 1;   // play a short test ringing when the audio is ready
 static int   g_DeathFlags  = -1;  // -1 = copy the flags the game uses for the original animation  // animation flags for replaced deaths (4=freeze last frame, 8=unlock)
 static int   g_ForceStart  = 1;   // call Start() on the replaced animation
+static float g_HeadMax     = 30.0f;  // headshot uses H* only if the hit strength is below this (original mod: 30)
+static float g_StrongHit   = 200.0f; // HF*/HB* only if the hit strength is above this (original mod: 200)
 static int   g_PlayerDeath = 1;   // 1 = also replace the player's own death animation
 static int   g_DeathPhase  = 0;   // 0 = off, 1 = just find symbols, 2 = also load "Death Anims.ifp"
 
@@ -139,6 +141,8 @@ static void LoadConfig()
         else if (key == "TestOnLoad")  g_TestOnLoad  = (int)val;
         else if (key == "DeathPhase")  g_DeathPhase  = (int)val;
         else if (key == "ForceStart")  g_ForceStart  = (int)val;
+        else if (key == "HeadMaxIntensity") g_HeadMax = val;
+        else if (key == "StrongHitIntensity") g_StrongHit = val;
         else if (key == "PlayerDeath") g_PlayerDeath = (int)val;
         else if (key == "DeathFlags")  g_DeathFlags  = (int)val;
     }
@@ -574,9 +578,9 @@ static void DieComplex_hook(void* self, int weapon, int group, int animId, float
         int variant = 0;
         if (g_EvValid)
         {
-            if      (!strcmp(name, "KO_SHOT_FRONT") && g_EvBone == 9 && g_EvInt < 30.0f) variant = 1;   // H*  headshot
-            else if (!strcmp(name, "KO_SKID_FRONT") && g_EvInt > 200.0f)                 variant = 2;   // HF* strong hit from the front
-            else if (!strcmp(name, "KO_SKID_BACK")  && g_EvInt > 200.0f)                 variant = 3;   // HB* strong hit from behind
+            if      (!strcmp(name, "KO_SHOT_FRONT") && g_EvBone == 9 && g_EvInt < g_HeadMax) variant = 1;   // H*  headshot
+            else if (!strcmp(name, "KO_SKID_FRONT") && g_EvInt > g_StrongHit)                 variant = 2;   // HF* strong hit from the front
+            else if (!strcmp(name, "KO_SKID_BACK")  && g_EvInt > g_StrongHit)                 variant = 3;   // HB* strong hit from behind
         }
         g_DeathVariant = variant;
         if (variant) LOGI("  special death variant %d (bone=%d intensity=%.1f)", variant, g_EvBone, g_EvInt);
