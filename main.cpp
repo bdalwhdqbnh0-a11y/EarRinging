@@ -623,6 +623,15 @@ static void* BlendId_hook(void* clump, int group, int id, float blend)
     return g_BlendIdOrig(clump, group, id, blend);
 }
 
+typedef void (*ComputeDeathAnim_t)(void* ev, void* ped, bool b);
+static ComputeDeathAnim_t g_ComputeDeathOrig = nullptr;
+static void ComputeDeathAnim_hook(void* ev, void* ped, bool b)
+{
+    static int n = 0;
+    if (n < 40) { ++n; char lab[48]; snprintf(lab, sizeof(lab), "DamageEvent #%d raw(112)", n); HexDump(lab, ev, 112); }
+    g_ComputeDeathOrig(ev, ped, b);
+}
+
 // ---------------------------------------------------------------- hook
 
 static bool AddExplosion_hook(void* victim, void* creator, int type, CVector pos,
@@ -762,6 +771,9 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
         if (dId)  aml->Hook((void*)dId,  (void*)DieId_hook,  (void**)&g_DieIdOrig);
         uintptr_t dCx = ResolveExact("_ZN15CTaskComplexDieC2E11eWeaponType12AssocGroupId11AnimationIdffbbib");
         LOGI("TaskComplexDie ctor=%p", (void*)dCx);
+        uintptr_t cda = ResolveExact("_ZN12CEventDamage16ComputeDeathAnimEP4CPedb");
+        LOGI("ComputeDeathAnim=%p", (void*)cda);
+        if (cda) aml->Hook((void*)cda, (void*)ComputeDeathAnim_hook, (void**)&g_ComputeDeathOrig);
         uintptr_t bId   = ResolveExact("_ZN12CAnimManager14BlendAnimationEP7RpClump12AssocGroupId11AnimationIdf");
         uintptr_t bHier = ResolveExact("_ZN12CAnimManager14BlendAnimationEP7RpClumpP19CAnimBlendHierarchyif");
         LOGI("BlendAnimation id=%p hier=%p", (void*)bId, (void*)bHier);
