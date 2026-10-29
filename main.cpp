@@ -489,7 +489,7 @@ static const char* AnimNameFromId(int group, int animId)
     static const char* const names[] = { "KO_SKID_FRONT", "KO_SKID_BACK", "KO_SPIN_L", "KO_SPIN_R", "KO_SHOT_FRONT",
         "KO_SHOT_STOM", "KO_SHOT_ARM_L", "KO_SHOT_ARM_R", "KO_SHOT_LEG_L", "KO_SHOT_LEG_R", "KO_SHOT_FACE", "KO_SHOT_PARTIAL",
         "KO_SHOT_FRONT_0", "KO_SHOT_STOM_0", "FLOOR_HIT", "FLOOR_HIT_F", "BIKE_FALL_OFF", "KD_LEFT", "KD_RIGHT",
-        "KO_SPIN_FORWARD", "KO_SPIN_BACK", "DAM_STOMACH", "KO_SKID_FRONT_0", "KO_SKID_BACK_0", "DEAD_FALL", "SHOT_FRONT", nullptr };
+        "KO_SPIN_FORWARD", "KO_SPIN_BACK", "DAM_STOMACH", "BIKE_FALLR", "DROWN", "KO_SKID_FRONT_0", "KO_SKID_BACK_0", "DEAD_FALL", "SHOT_FRONT", nullptr };
     uintptr_t& fGet = g_GetAssoc; if (!fGet) fGet = ResolveExact("_ZN12CAnimManager18GetAnimAssociationE12AssocGroupId11AnimationId");
     if (!fGet || !g_AnimsBase) return nullptr;
     void* assoc = ((void* (*)(int, int))fGet)(group, animId);
@@ -521,6 +521,14 @@ static bool PickPrefix(const char* anim, const char** pre, int* cnt)
     else if (!strcmp(anim, "KO_SPIN_L"))     { *pre = "L";  *cnt = 13; }
     else if (!strcmp(anim, "KO_SPIN_R"))     { *pre = "R";  *cnt = 13; }
     else if (!strcmp(anim, "KO_SHOT_FRONT")) { *pre = "SF"; *cnt = 44; }
+    // extra categories of the newer DeathMod version (used only if the IFP really contains them)
+    else if (!strcmp(anim, "FLOOR_HIT"))     { *pre = "FU"; *cnt = 1; }
+    else if (!strcmp(anim, "FLOOR_HIT_F"))   { *pre = "FD"; *cnt = 1; }
+    else if (!strcmp(anim, "BIKE_FALLR"))    { *pre = "BF"; *cnt = 1; }
+    else if (!strcmp(anim, "DROWN"))         { *pre = "WT"; *cnt = 1; }
+    else if (!strcmp(anim, "KD_LEFT"))       { *pre = "KL"; *cnt = 1; }
+    else if (!strcmp(anim, "KD_RIGHT"))      { *pre = "KR"; *cnt = 1; }
+    else if (!strcmp(anim, "KO_SHOT_FACE"))  { *pre = "FC"; *cnt = 1; }
     else return false;
     return true;
 }
@@ -553,6 +561,18 @@ static void DieId_hook(void* self, int group, int animId, float blend, float spe
     g_DieIdOrig(self, group, animId, blend, speed);
 }
 
+// How many animations "<prefix>1..N" does the loaded IFP really contain?
+static int CountOf(const char* pre)
+{
+    static std::map<std::string, int> cache;
+    auto it = cache.find(pre);
+    if (it != cache.end()) return it->second;
+    int mx = 0;
+    for (int i = 1; i <= 150; ++i) { char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, i); if (FindNewAnim(nm)) mx = i; }
+    if (g_NewEnd > g_NewStart) cache[pre] = mx;   // only cache once the IFP is loaded
+    return mx;
+}
+
 typedef void (*DieComplex_t)(void*, int, int, int, float, float, bool, bool, int, bool);
 static DieComplex_t g_DieComplexOrig = nullptr;
 
@@ -571,7 +591,7 @@ static void DieComplex_hook(void* self, int weapon, int group, int animId, float
     const char* name = CachedAnimName(group, animId);
     if (n < 200) { ++n; LOGI("DieComplex weapon=%d group=%d animId=%d -> %s blend=%.2f speed=%.2f", weapon, group, animId, name ? name : "(other)", blend, speed); }
     const char* pre; int cnt;
-    if (PickPrefix(name, &pre, &cnt))
+    if (PickPrefix(name, &pre, &cnt) && CountOf(pre) > 0)
     {
         g_DeathGroup = group; g_DeathId = animId; g_DeathExpire = NowMs() + 2000;
         // same rules as the original CLEO mod
@@ -593,18 +613,6 @@ typedef void* (*BlendAnimId_t)(void* clump, int group, int id, float blend);
 typedef void* (*BlendAnimHier_t)(void* clump, void* hier, int flags, float blend);
 static BlendAnimId_t   g_BlendIdOrig   = nullptr;
 static BlendAnimHier_t g_BlendHierOrig = nullptr;
-
-// How many animations "<prefix>1..N" does the loaded IFP really contain?
-static int CountOf(const char* pre)
-{
-    static std::map<std::string, int> cache;
-    auto it = cache.find(pre);
-    if (it != cache.end()) return it->second;
-    int mx = 0;
-    for (int i = 1; i <= 150; ++i) { char nm[16]; snprintf(nm, sizeof(nm), "%s%d", pre, i); if (FindNewAnim(nm)) mx = i; }
-    if (g_NewEnd > g_NewStart) cache[pre] = mx;   // only cache once the IFP is loaded
-    return mx;
-}
 
 static uintptr_t g_FindPlayerPed = 0;
 // Is this clump the player's? (find the clump pointer inside the player ped object)
