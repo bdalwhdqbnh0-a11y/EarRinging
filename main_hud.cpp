@@ -66,6 +66,9 @@ static int   g_PanelCol[4] = { 0, 0, 0, 60 };
 static int   g_ArmorAlways = 1;     // draw an empty armor bar even when the player has no armor
 static float g_StarScale   = 1.0f;  // size of the wanted stars
 static float g_ClockScale = 1.0f, g_MoneyScale = 1.0f, g_AmmoScale = 1.0f;   // text size multipliers (1.0 = the game's own)
+// weapon icon turns red when reloading / out of ammo
+static int g_RedOnReload = 0, g_RedOnEmpty = 0;
+static int g_RedCol[3] = { 255, 40, 40 };
 // colours "r g b a" (-1 = keep the game's own)
 static int g_ClockCol[4]  = { -1, -1, -1, -1 };
 static int g_MoneyCol[4]  = { -1, -1, -1, -1 };
@@ -173,6 +176,9 @@ static void LoadConfig()
         else if (!strcmp(k, "PanelColor"))     sscanf(v, "%d %d %d %d", &g_PanelCol[0], &g_PanelCol[1], &g_PanelCol[2], &g_PanelCol[3]);
         else if (!strcmp(k, "ArmorAlways"))    g_ArmorAlways = atoi(v);
         else if (!strcmp(k, "StarScale"))      g_StarScale = (float)atof(v);
+        else if (!strcmp(k, "RedOnReload"))    g_RedOnReload = atoi(v);
+        else if (!strcmp(k, "RedOnEmpty"))     g_RedOnEmpty  = atoi(v);
+        else if (!strcmp(k, "RedColor"))       sscanf(v, "%d %d %d", &g_RedCol[0], &g_RedCol[1], &g_RedCol[2]);
         else if (!strcmp(k, "ClockColor"))     sscanf(v, "%d %d %d %d", &g_ClockCol[0], &g_ClockCol[1], &g_ClockCol[2], &g_ClockCol[3]);
         else if (!strcmp(k, "MoneyColor"))     sscanf(v, "%d %d %d %d", &g_MoneyCol[0], &g_MoneyCol[1], &g_MoneyCol[2], &g_MoneyCol[3]);
         else if (!strcmp(k, "AmmoColor"))      sscanf(v, "%d %d %d %d", &g_AmmoCol[0], &g_AmmoCol[1], &g_AmmoCol[2], &g_AmmoCol[3]);
@@ -403,6 +409,48 @@ static void DrawWanted_hook(void* self)
     g_Ctx = old;
 }
 
+// ---- weapon icon colour: the game builds CRGBA(255,255,255,alpha) for the icon with three "mov wN,#255"
+// instructions (DrawWeaponIcon +0x1b0..+0x1b8). We rewrite them while the icon should be red.
+static uintptr_t GetBias()
+{
+    uintptr_t b = 0;
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
+        if (info->dlpi_name && strstr(info->dlpi_name, "libGTASA.so")) { *(uintptr_t*)data = info->dlpi_addr; return 1; }
+        return 0;
+    }, &b);
+    return b;
+}
+static uintptr_t g_Bias = 0;
+static int g_IconPatchOK = -1;       // -1 not checked, 0 unusable, 1 ok
+static bool g_IconIsRed = false;
+
+static void SetIconColor(const int* col)   // nullptr = restore the game's own white
+{
+    static const uint32_t orig[3] = { 0x32001fe1, 0x32001fe2, 0x32001fe3 };   // orr w1/w2/w3, wzr, #0xff
+    const uintptr_t base = 0x37ddcc;
+    if (!g_Bias) g_Bias = GetBias();
+    if (!g_Bias) { g_IconPatchOK = 0; return; }
+    uint32_t* a[3] = { (uint32_t*)(g_Bias + base), (uint32_t*)(g_Bias + base + 4), (uint32_t*)(g_Bias + base + 8) };
+    if (g_IconPatchOK < 0)
+    {
+        g_IconPatchOK = (*a[0] == orig[0] && *a[1] == orig[1] && *a[2] == orig[2]) ? 1 : 0;
+        LOGI("icon colour patch: %s (%08x %08x %08x)", g_IconPatchOK ? "ok" : "UNUSABLE", *a[0], *a[1], *a[2]);
+    }
+    if (g_IconPatchOK != 1) return;
+    uint32_t nw[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        int c = col ? col[i] : 255;
+        if (c < 0) c = 0; if (c > 255) c = 255;
+        nw[i] = col ? (0x52800000u | ((uint32_t)c << 5) | (uint32_t)(1 + i)) : orig[i];   // movz wN, #c
+    }
+    uintptr_t page = (uintptr_t)a[0] & ~(uintptr_t)4095;
+    mprotect((void*)page, 4096 * 2, PROT_READ | PROT_WRITE | PROT_EXEC);
+    for (int i = 0; i < 3; ++i) if (*a[i] != nw[i]) *a[i] = nw[i];
+    __builtin___clear_cache((char*)a[0], (char*)a[0] + 12);
+    mprotect((void*)page, 4096 * 2, PROT_READ | PROT_EXEC);
+}
+
 typedef void (*DrawRectFn_t)(void*, void*, CRect, float);
 static DrawRectFn_t g_DrawAmmoOrig = nullptr;
 static void DrawAmmo_hook(void* self, void* ped, CRect r, float f)
@@ -458,6 +506,21 @@ static void DrawWeapon_hook(void* self, void* ped, CRect r, float f)
             if (st == 2 && g_ReloadCol[0] >= 0) g_WeaponTint = g_ReloadCol;
             else if (st == 1 && g_EmptyCol[0] >= 0) g_WeaponTint = g_EmptyCol;
         }
+    }
+    if (g_Enable && (g_RedOnReload || g_RedOnEmpty) && ped)
+    {
+        bool red = false;
+        int8_t slot = *(int8_t*)((uintptr_t)ped + 0x8dc);
+        if (slot >= 0 && slot < 13)
+        {
+            const uint8_t* wp = (const uint8_t*)ped + 0x730 + slot * 32;
+            int type = *(const int*)wp, state = *(const int*)(wp + 4), clip = *(const int*)(wp + 8), total = *(const int*)(wp + 12);
+            bool ammoWeapon = type >= 16 && type <= 45;
+            red = ammoWeapon && ((g_RedOnReload && state == 2) || (g_RedOnEmpty && (total <= 0 || state == 3)));
+            if (LOGLIM(8 + CTX_HEALTH) && ammoWeapon)
+                LOGI("weapon type=%d state=%d clip=%d total=%d red=%d", type, state, clip, total, (int)red);
+        }
+        if (red != g_IconIsRed) { SetIconColor(red ? g_RedCol : nullptr); g_IconIsRed = red; }
     }
     int old = g_Ctx; g_Ctx = CTX_WEAPON;
     g_DrawWeaponOrig(self, ped, r, f);
