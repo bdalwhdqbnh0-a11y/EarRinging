@@ -48,8 +48,13 @@ static int   g_Enable   = 1;
 static int   g_LogMax   = 60;      // how many lines of each kind to write to the log
 static float g_ClockX   = -1, g_ClockY   = -1;
 static float g_MoneyX   = -1, g_MoneyY   = -1;
-static float g_WantedX  = -1, g_WantedY  = -1;
+// wanted stars are drawn one by one, so they move by an OFFSET (added to the game's own x/y)
+static float g_WantedDX = 0, g_WantedDY = 0;
 static float g_AmmoX    = -1, g_AmmoY    = -1;
+// bars: x y width height (absolute pixels, -1 = keep)
+static float g_BarH[4] = { -1, -1, -1, -1 };
+static float g_BarA[4] = { -1, -1, -1, -1 };
+static float g_BarB[4] = { -1, -1, -1, -1 };
 // weapon icon rectangle (left, bottom, right, top) in screen pixels; set all four to use it
 static float g_WIcon[4] = { -1, -1, -1, -1 };
 // ammo rectangle passed to DrawAmmo (optional)
@@ -97,8 +102,9 @@ static void WriteDefaultIni(const std::string& path)
           "; -1 = keep the game's own position (values are screen pixels, see log.txt for the originals)\n"
           "ClockX=-1\nClockY=-1\n"
           "MoneyX=-1\nMoneyY=-1\n"
-          "WantedX=-1\nWantedY=-1\n"
+          "WantedDX=0\nWantedDY=0\n"
           "AmmoX=-1\nAmmoY=-1\n"
+          "; bars: x y width height  (-1 -1 -1 -1 = keep)\nHealthBar=-1 -1 -1 -1\nArmorBar=-1 -1 -1 -1\nBreathBar=-1 -1 -1 -1\n"
           "; rectangles: left bottom right top  (leave -1 -1 -1 -1 to keep the game's own)\n"
           "WeaponIconRect=-1 -1 -1 -1\n"
           "AmmoRect=-1 -1 -1 -1\n", f);
@@ -127,16 +133,19 @@ static void LoadConfig()
         else if (!strcmp(k, "ClockY"))         g_ClockY  = (float)atof(v);
         else if (!strcmp(k, "MoneyX"))         g_MoneyX  = (float)atof(v);
         else if (!strcmp(k, "MoneyY"))         g_MoneyY  = (float)atof(v);
-        else if (!strcmp(k, "WantedX"))        g_WantedX = (float)atof(v);
-        else if (!strcmp(k, "WantedY"))        g_WantedY = (float)atof(v);
+        else if (!strcmp(k, "WantedDX"))       g_WantedDX = (float)atof(v);
+        else if (!strcmp(k, "WantedDY"))       g_WantedDY = (float)atof(v);
+        else if (!strcmp(k, "HealthBar"))      ParseRect(v, g_BarH);
+        else if (!strcmp(k, "ArmorBar"))       ParseRect(v, g_BarA);
+        else if (!strcmp(k, "BreathBar"))      ParseRect(v, g_BarB);
         else if (!strcmp(k, "AmmoX"))          g_AmmoX   = (float)atof(v);
         else if (!strcmp(k, "AmmoY"))          g_AmmoY   = (float)atof(v);
         else if (!strcmp(k, "WeaponIconRect")) ParseRect(v, g_WIcon);
         else if (!strcmp(k, "AmmoRect"))       ParseRect(v, g_ARect);
     }
     fclose(f);
-    LOGI("Config: Enable=%d Clock=(%.1f,%.1f) Money=(%.1f,%.1f) Wanted=(%.1f,%.1f) Ammo=(%.1f,%.1f)",
-         g_Enable, g_ClockX, g_ClockY, g_MoneyX, g_MoneyY, g_WantedX, g_WantedY, g_AmmoX, g_AmmoY);
+    LOGI("Config: Enable=%d Clock=(%.1f,%.1f) Money=(%.1f,%.1f) WantedD=(%.1f,%.1f) Ammo=(%.1f,%.1f)",
+         g_Enable, g_ClockX, g_ClockY, g_MoneyX, g_MoneyY, g_WantedDX, g_WantedDY, g_AmmoX, g_AmmoY);
 }
 
 // ---------------------------------------------------------------- symbol lookup (libGTASA .dynsym/.symtab)
@@ -208,7 +217,7 @@ static void PrintString_hook(float x, float y, uint16_t* text)
         char s[64]; ToAscii(text, s, sizeof(s));
         float nx = x, ny = y;
         const char* what = "text";
-        if (g_Ctx == CTX_WANTED)      { what = "wanted"; if (g_WantedX >= 0) nx = g_WantedX; if (g_WantedY >= 0) ny = g_WantedY; }
+        if (g_Ctx == CTX_WANTED)      { what = "wanted"; nx = x + g_WantedDX; ny = y + g_WantedDY; }
         else if (g_Ctx == CTX_AMMO)   { what = "ammo";   if (g_AmmoX   >= 0) nx = g_AmmoX;   if (g_AmmoY   >= 0) ny = g_AmmoY; }
         else if (g_Ctx == CTX_INFO)
         {
@@ -275,8 +284,17 @@ static DrawBarChart_t g_BarOrig = nullptr;
 static void DrawBarChart_hook(float x, float y, uint16_t w, uint8_t h, float pct, int8_t prog,
                               uint8_t b1, uint8_t b2, CRGBA c1, CRGBA c2)
 {
-    if (g_Enable && g_Ctx >= CTX_HEALTH && LOGLIM(g_Ctx))
-        LOGI("BarChart ctx=%s x=%.1f y=%.1f w=%u h=%u pct=%.1f", CtxName(g_Ctx), x, y, w, h, pct);
+    if (g_Enable && g_Ctx >= CTX_HEALTH)
+    {
+        const float* r = (g_Ctx == CTX_HEALTH) ? g_BarH : (g_Ctx == CTX_ARMOR) ? g_BarA : g_BarB;
+        float ox = x, oy = y; unsigned ow = w, oh = h;
+        if (r[0] >= 0) x = r[0];
+        if (r[1] >= 0) y = r[1];
+        if (r[2] >= 0) w = (uint16_t)r[2];
+        if (r[3] >= 0) h = (uint8_t)r[3];
+        if (LOGLIM(g_Ctx))
+            LOGI("BarChart ctx=%s x=%.1f y=%.1f w=%u h=%u pct=%.1f -> x=%.1f y=%.1f w=%u h=%u", CtxName(g_Ctx), ox, oy, ow, oh, pct, x, y, (unsigned)w, (unsigned)h);
+    }
     g_BarOrig(x, y, w, h, pct, prog, b1, b2, c1, c2);
 }
 
