@@ -73,6 +73,9 @@ static int g_AmmoCol[4]   = { -1, -1, -1, -1 };
 static int g_TextBg[4]    = { -1, -1, -1, -1 };   // dark box behind clock / money / ammo
 static int g_HealthCol[4] = { -1, -1, -1, -1 };
 static int g_ArmorCol[4]  = { -1, -1, -1, -1 };
+// weapon icon colour while the gun is out of ammo / being reloaded (r g b, -1 = off)
+static int g_EmptyCol[3]  = { 255, 40, 40 };
+static int g_ReloadCol[3] = { 255, 40, 40 };
 // weapon icon rectangle (left, bottom, right, top) in screen pixels; set all four to use it
 static float g_WIcon[4] = { -1, -1, -1, -1 };
 // ammo rectangle passed to DrawAmmo (optional)
@@ -176,6 +179,8 @@ static void LoadConfig()
         else if (!strcmp(k, "TextBackground")) sscanf(v, "%d %d %d %d", &g_TextBg[0], &g_TextBg[1], &g_TextBg[2], &g_TextBg[3]);
         else if (!strcmp(k, "HealthColor"))    sscanf(v, "%d %d %d %d", &g_HealthCol[0], &g_HealthCol[1], &g_HealthCol[2], &g_HealthCol[3]);
         else if (!strcmp(k, "ArmorColor"))     sscanf(v, "%d %d %d %d", &g_ArmorCol[0], &g_ArmorCol[1], &g_ArmorCol[2], &g_ArmorCol[3]);
+        else if (!strcmp(k, "WeaponEmptyColor"))  sscanf(v, "%d %d %d", &g_EmptyCol[0], &g_EmptyCol[1], &g_EmptyCol[2]);
+        else if (!strcmp(k, "WeaponReloadColor")) sscanf(v, "%d %d %d", &g_ReloadCol[0], &g_ReloadCol[1], &g_ReloadCol[2]);
         else if (!strcmp(k, "ClockScale"))     g_ClockScale = (float)atof(v);
         else if (!strcmp(k, "MoneyScale"))     g_MoneyScale = (float)atof(v);
         else if (!strcmp(k, "AmmoScale"))      g_AmmoScale  = (float)atof(v);
@@ -411,14 +416,53 @@ static void DrawAmmo_hook(void* self, void* ped, CRect r, float f)
 }
 
 static DrawRectFn_t g_DrawWeaponOrig = nullptr;
+static const int* g_WeaponTint = nullptr;    // colour to paint the weapon icon with (nullptr = normal)
+static int g_LastTintState = -1;
+
+// CSprite2d::Draw: recolour the weapon icon while it is being drawn
+typedef void (*Sprite2dDraw_t)(void*, const CRect*, const CRGBA*);
+static Sprite2dDraw_t g_Sprite2dDrawOrig = nullptr;
+static void Sprite2dDraw_hook(void* self, const CRect* r, const CRGBA* c)
+{
+    if (g_Ctx == CTX_WEAPON && g_WeaponTint && c)
+    {
+        CRGBA cc = { (uint8_t)g_WeaponTint[0], (uint8_t)g_WeaponTint[1], (uint8_t)g_WeaponTint[2], c->a };
+        g_Sprite2dDrawOrig(self, r, &cc);
+        return;
+    }
+    g_Sprite2dDrawOrig(self, r, c);
+}
+
 static void DrawWeapon_hook(void* self, void* ped, CRect r, float f)
 {
     if (g_Enable && LOGLIM(8 + CTX_WEAPON))
         LOGI("DrawWeaponIcon rect L=%.1f B=%.1f R=%.1f T=%.1f f=%.2f", r.left, r.bottom, r.right, r.top, f);
     if (g_Enable && g_WIcon[0] >= 0) { r.left = g_WIcon[0]; r.bottom = g_WIcon[1]; r.right = g_WIcon[2]; r.top = g_WIcon[3]; }
+
+    // weapon state of the player's current slot (offsets read from CWidgetPlayerInfo::DrawAmmo)
+    g_WeaponTint = nullptr;
+    if (g_Enable && ped)
+    {
+        int8_t slot = *(int8_t*)((uintptr_t)ped + 0x8dc);
+        if (slot >= 0 && slot < 13)
+        {
+            const int* wp = (const int*)((uintptr_t)ped + 0x730 + (size_t)slot * 32);
+            int type = wp[0], state = wp[1], clip = wp[2], total = wp[3];
+            bool gun = (type >= 22 && type <= 46) || (type >= 16 && type <= 18);
+            int st = gun ? ((state == 2) ? 2 : (total <= 0 ? 1 : 0)) : 0;
+            if (st != g_LastTintState)
+            {
+                LOGI("weapon state change: type=%d state=%d clip=%d total=%d -> tint=%d", type, state, clip, total, st);
+                g_LastTintState = st;
+            }
+            if (st == 2 && g_ReloadCol[0] >= 0) g_WeaponTint = g_ReloadCol;
+            else if (st == 1 && g_EmptyCol[0] >= 0) g_WeaponTint = g_EmptyCol;
+        }
+    }
     int old = g_Ctx; g_Ctx = CTX_WEAPON;
     g_DrawWeaponOrig(self, ped, r, f);
     g_Ctx = old;
+    g_WeaponTint = nullptr;
 }
 
 // bars: only logged in phase 1 (positions are fed to CSprite2d::DrawBarChart)
@@ -487,6 +531,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_SetBackground      = (SetBackground_t)ResolveExact("_ZN5CFont13SetBackgroundEhh");
     LOGI("SetColor=%p SetBackground=%p SetBackgroundColor=%p", (void*)g_SetColor, (void*)g_SetBackground, (void*)g_SetBackgroundColor);
     LOGI("SetScale=%p Details=%p", (void*)g_SetScale, (void*)g_FontDetails);
+    Install("_ZN9CSprite2d4DrawERK5CRectRK5CRGBA",                    (void*)Sprite2dDraw_hook, &g_Sprite2dDrawOrig);
     Install("_ZN5CFont11PrintStringEffPt",                           (void*)PrintString_hook,  &g_PrintStringOrig);
     Install("_ZN17CWidgetPlayerInfo4DrawEv",                         (void*)InfoDraw_hook,     &g_InfoDrawOrig);
     Install("_ZN17CWidgetPlayerInfo10DrawWantedEv",                  (void*)DrawWanted_hook,   &g_DrawWantedOrig);
