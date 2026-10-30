@@ -60,6 +60,11 @@ static float g_WantedSpacing = 1.0f;
 static float g_BarH[4] = { -1, -1, -1, -1 };
 static float g_BarA[4] = { -1, -1, -1, -1 };
 static float g_BarB[4] = { -1, -1, -1, -1 };
+// panel (translucent background rectangle drawn behind the HUD): left bottom right top, colour r g b a
+static float g_Panel[4]    = { -1, -1, -1, -1 };
+static int   g_PanelCol[4] = { 0, 0, 0, 60 };
+static int   g_ArmorAlways = 1;     // draw an empty armor bar even when the player has no armor
+static float g_StarScale   = 1.0f;  // size of the wanted stars
 // weapon icon rectangle (left, bottom, right, top) in screen pixels; set all four to use it
 static float g_WIcon[4] = { -1, -1, -1, -1 };
 // ammo rectangle passed to DrawAmmo (optional)
@@ -114,7 +119,8 @@ static void WriteDefaultIni(const std::string& path)
           "WeaponIconRect=-1 -1 -1 -1\n"
           "AmmoRect=-1 -1 -1 -1\n"
           "; Align: 0 = X as the game gives it (right edge), 1 = X is the left edge of the text\n"
-          "ClockAlign=0\nMoneyAlign=0\nAmmoAlign=0\nWantedSpacing=1.0\n"
+          "ClockAlign=0\nMoneyAlign=0\nAmmoAlign=0\nWantedSpacing=1.0\nStarScale=1.0\n"
+          "PanelRect=-1 -1 -1 -1\nPanelColor=0 0 0 60\nArmorAlways=1\n"
           , f);
     fclose(f);
 }
@@ -152,6 +158,10 @@ static void LoadConfig()
         else if (!strcmp(k, "MoneyAlign"))     g_MoneyAlign = atoi(v);
         else if (!strcmp(k, "AmmoAlign"))      g_AmmoAlign  = atoi(v);
         else if (!strcmp(k, "WantedSpacing"))  g_WantedSpacing = (float)atof(v);
+        else if (!strcmp(k, "PanelRect"))      ParseRect(v, g_Panel);
+        else if (!strcmp(k, "PanelColor"))     sscanf(v, "%d %d %d %d", &g_PanelCol[0], &g_PanelCol[1], &g_PanelCol[2], &g_PanelCol[3]);
+        else if (!strcmp(k, "ArmorAlways"))    g_ArmorAlways = atoi(v);
+        else if (!strcmp(k, "StarScale"))      g_StarScale = (float)atof(v);
         else if (!strcmp(k, "WeaponIconRect")) ParseRect(v, g_WIcon);
         else if (!strcmp(k, "AmmoRect"))       ParseRect(v, g_ARect);
     }
@@ -203,7 +213,7 @@ static uintptr_t ResolveExact(const char* name)
 // Which part of the player-info widget is being drawn right now (the game draws on one thread).
 enum Ctx { CTX_NONE = 0, CTX_INFO, CTX_WANTED, CTX_AMMO, CTX_WEAPON, CTX_HEALTH, CTX_ARMOR, CTX_BREATH };
 static int g_Ctx = CTX_NONE;
-static int g_LogN[8] = {0};
+static int g_LogN[16] = {0};
 #define LOGLIM(c) (g_LogN[c]++ < g_LogMax)
 
 static const char* CtxName(int c)
@@ -220,9 +230,13 @@ static void ToAscii(const uint16_t* t, char* out, size_t n)
     out[i] = 0;
 }
 
+typedef void (*SetScale_t)(float);
+static SetScale_t g_SetScale = nullptr;
+static uint8_t* g_FontDetails = nullptr;   // CFont::Details; the raw scale given to SetScale is stored at +8
 typedef float (*GetStringWidth_t)(uint16_t*, uint8_t, uint8_t);
 static GetStringWidth_t g_GetStringWidth = nullptr;
 static float g_WantedFirstX = -1e9f;
+static float g_StarBase = 0.0f;
 
 typedef void (*PrintString_t)(float, float, uint16_t*);
 static PrintString_t g_PrintStringOrig = nullptr;
@@ -240,6 +254,11 @@ static void PrintString_hook(float x, float y, uint16_t* text)
             if (g_WantedFirstX < -1e8f) g_WantedFirstX = x;
             nx = g_WantedFirstX + (x - g_WantedFirstX) * g_WantedSpacing + g_WantedDX;
             ny = y + g_WantedDY;
+            if (g_StarScale != 1.0f && g_SetScale && g_FontDetails)
+            {
+                if (g_StarBase <= 0.0f) g_StarBase = *(float*)(g_FontDetails + 8);   // the game's own scale, read once per DrawWanted
+                if (g_StarBase > 0.0f) g_SetScale(g_StarBase * g_StarScale);
+            }
         }
         else if (g_Ctx == CTX_AMMO)
         {
@@ -269,12 +288,54 @@ static void PrintString_hook(float x, float y, uint16_t* text)
     g_PrintStringOrig(x, y, text);
 }
 
+typedef void (*RwRenderStateSet_t)(int, void*);
+static RwRenderStateSet_t g_RwRS = nullptr;
+typedef void (*DrawRect_t)(const CRect&, const CRGBA&);
+static DrawRect_t g_DrawRect = nullptr;
+
+// bar data captured from the game's own calls (the game passes the colours by pointer)
+typedef void (*DrawBarChart_t)(float, float, uint16_t, uint8_t, float, int8_t, uint8_t, uint8_t, const CRGBA*, const CRGBA*);
+static DrawBarChart_t g_BarOrig = nullptr;
+struct BarData { bool seen = false; float pct = 0; int8_t prog = 0; uint8_t b1 = 1, b2 = 1; CRGBA c1{0,200,0,255}, c2{0,0,0,255}; };
+static BarData g_BarHealth, g_BarArmor;
+
+static void DrawOwnBar(const float* r, const BarData& d)
+{
+    g_BarOrig(r[0], r[1], (uint16_t)r[2], (uint8_t)r[3], d.pct, d.prog, d.b1, d.b2, &d.c1, &d.c2);
+}
+
 typedef void (*PlayerInfoDraw_t)(void*);
 static PlayerInfoDraw_t g_InfoDrawOrig = nullptr;
 static void InfoDraw_hook(void* self)
 {
     int old = g_Ctx; g_Ctx = CTX_INFO;
+    g_BarHealth.seen = g_BarArmor.seen = false;
+    if (g_Enable && g_Panel[0] >= 0 && g_RwRS && g_DrawRect)
+    {
+        g_RwRS(1, nullptr);          // no texture
+        g_RwRS(7, (void*)1);         // vertex alpha on
+        CRect pr = { g_Panel[0], g_Panel[1], g_Panel[2], g_Panel[3] };
+        CRGBA pc = { (uint8_t)g_PanelCol[0], (uint8_t)g_PanelCol[1], (uint8_t)g_PanelCol[2], (uint8_t)g_PanelCol[3] };
+        g_DrawRect(pr, pc);
+    }
     g_InfoDrawOrig(self);
+    if (g_Enable && g_BarOrig)
+    {
+        // bars the game wanted to draw were captured (not drawn) -> draw them at our rectangles
+        if (g_BarH[0] >= 0 && g_BarHealth.seen) DrawOwnBar(g_BarH, g_BarHealth);
+        if (g_BarA[0] >= 0)
+        {
+            if (g_BarArmor.seen) DrawOwnBar(g_BarA, g_BarArmor);
+            else if (g_ArmorAlways)
+            {
+                BarData e = g_BarHealth;                 // same border / shadow flags as health
+                e.pct = 0; e.prog = 0;
+                e.c1 = { 200, 200, 200, 255 };
+                e.c2 = { 110, 110, 110, 255 };
+                DrawOwnBar(g_BarA, e);
+            }
+        }
+    }
     g_Ctx = old;
 }
 
@@ -284,6 +345,7 @@ static void DrawWanted_hook(void* self)
 {
     int old = g_Ctx; g_Ctx = CTX_WANTED;
     g_WantedFirstX = -1e9f;
+    g_StarBase = 0.0f;
     g_DrawWantedOrig(self);
     g_Ctx = old;
 }
@@ -292,7 +354,7 @@ typedef void (*DrawRectFn_t)(void*, void*, CRect, float);
 static DrawRectFn_t g_DrawAmmoOrig = nullptr;
 static void DrawAmmo_hook(void* self, void* ped, CRect r, float f)
 {
-    if (g_Enable && LOGLIM(CTX_AMMO))
+    if (g_Enable && LOGLIM(8 + CTX_AMMO))
         LOGI("DrawAmmo rect L=%.1f B=%.1f R=%.1f T=%.1f f=%.2f", r.left, r.bottom, r.right, r.top, f);
     if (g_Enable && g_ARect[0] >= 0) { r.left = g_ARect[0]; r.bottom = g_ARect[1]; r.right = g_ARect[2]; r.top = g_ARect[3]; }
     int old = g_Ctx; g_Ctx = CTX_AMMO;
@@ -303,7 +365,7 @@ static void DrawAmmo_hook(void* self, void* ped, CRect r, float f)
 static DrawRectFn_t g_DrawWeaponOrig = nullptr;
 static void DrawWeapon_hook(void* self, void* ped, CRect r, float f)
 {
-    if (g_Enable && LOGLIM(CTX_WEAPON))
+    if (g_Enable && LOGLIM(8 + CTX_WEAPON))
         LOGI("DrawWeaponIcon rect L=%.1f B=%.1f R=%.1f T=%.1f f=%.2f", r.left, r.bottom, r.right, r.top, f);
     if (g_Enable && g_WIcon[0] >= 0) { r.left = g_WIcon[0]; r.bottom = g_WIcon[1]; r.right = g_WIcon[2]; r.top = g_WIcon[3]; }
     int old = g_Ctx; g_Ctx = CTX_WEAPON;
@@ -318,21 +380,29 @@ static void Health_hook(void* s, int a, float b) { int o = g_Ctx; g_Ctx = CTX_HE
 static void Armor_hook (void* s, int a, float b) { int o = g_Ctx; g_Ctx = CTX_ARMOR;  g_ArmorOrig(s, a, b);  g_Ctx = o; }
 static void Breath_hook(void* s, int a, float b) { int o = g_Ctx; g_Ctx = CTX_BREATH; g_BreathOrig(s, a, b); g_Ctx = o; }
 
-typedef void (*DrawBarChart_t)(float, float, uint16_t, uint8_t, float, int8_t, uint8_t, uint8_t, CRGBA, CRGBA);
-static DrawBarChart_t g_BarOrig = nullptr;
 static void DrawBarChart_hook(float x, float y, uint16_t w, uint8_t h, float pct, int8_t prog,
-                              uint8_t b1, uint8_t b2, CRGBA c1, CRGBA c2)
+                              uint8_t b1, uint8_t b2, const CRGBA* c1, const CRGBA* c2)
 {
     if (g_Enable && g_Ctx >= CTX_HEALTH)
     {
         const float* r = (g_Ctx == CTX_HEALTH) ? g_BarH : (g_Ctx == CTX_ARMOR) ? g_BarA : g_BarB;
-        float ox = x, oy = y; unsigned ow = w, oh = h;
+        if (LOGLIM(g_Ctx))
+            LOGI("BarChart ctx=%s x=%.1f y=%.1f w=%u h=%u pct=%.1f prog=%d b1=%u b2=%u c1=%u,%u,%u,%u", CtxName(g_Ctx), x, y,
+                 (unsigned)w, (unsigned)h, pct, (int)prog, (unsigned)b1, (unsigned)b2,
+                 c1 ? c1->r : 0, c1 ? c1->g : 0, c1 ? c1->b : 0, c1 ? c1->a : 0);
+        if ((g_Ctx == CTX_HEALTH || g_Ctx == CTX_ARMOR) && r[0] >= 0)
+        {
+            // capture; drawn later at our own rectangle
+            BarData& d = (g_Ctx == CTX_HEALTH) ? g_BarHealth : g_BarArmor;
+            d.seen = true; d.pct = pct; d.prog = prog; d.b1 = b1; d.b2 = b2;
+            if (c1) d.c1 = *c1;
+            if (c2) d.c2 = *c2;
+            return;
+        }
         if (r[0] >= 0) x = r[0];
         if (r[1] >= 0) y = r[1];
         if (r[2] >= 0) w = (uint16_t)r[2];
         if (r[3] >= 0) h = (uint8_t)r[3];
-        if (LOGLIM(g_Ctx))
-            LOGI("BarChart ctx=%s x=%.1f y=%.1f w=%u h=%u pct=%.1f -> x=%.1f y=%.1f w=%u h=%u", CtxName(g_Ctx), ox, oy, ow, oh, pct, x, y, (unsigned)w, (unsigned)h);
     }
     g_BarOrig(x, y, w, h, pct, prog, b1, b2, c1, c2);
 }
@@ -359,6 +429,12 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
 
     g_GetStringWidth = (GetStringWidth_t)ResolveExact("_ZN5CFont14GetStringWidthEPthh");
     LOGI("GetStringWidth=%p", (void*)g_GetStringWidth);
+    g_RwRS    = (RwRenderStateSet_t)ResolveExact("_Z16RwRenderStateSet13RwRenderStatePv");
+    g_DrawRect = (DrawRect_t)ResolveExact("_ZN9CSprite2d8DrawRectERK5CRectRK5CRGBA");
+    LOGI("RwRenderStateSet=%p DrawRect=%p", (void*)g_RwRS, (void*)g_DrawRect);
+    g_SetScale   = (SetScale_t)ResolveExact("_ZN5CFont8SetScaleEf");
+    g_FontDetails = (uint8_t*)ResolveExact("_ZN5CFont7DetailsE");
+    LOGI("SetScale=%p Details=%p", (void*)g_SetScale, (void*)g_FontDetails);
     Install("_ZN5CFont11PrintStringEffPt",                           (void*)PrintString_hook,  &g_PrintStringOrig);
     Install("_ZN17CWidgetPlayerInfo4DrawEv",                         (void*)InfoDraw_hook,     &g_InfoDrawOrig);
     Install("_ZN17CWidgetPlayerInfo10DrawWantedEv",                  (void*)DrawWanted_hook,   &g_DrawWantedOrig);
