@@ -2,6 +2,7 @@
 // Phase 1: reposition money / clock / wanted stars / ammo / weapon icon, and log the
 // original coordinates so the layout can be tuned from the ini.
 #include <mod/amlmod.h>
+#include <mod/config.h>
 #include <mod/logger.h>
 
 #include <android/log.h>
