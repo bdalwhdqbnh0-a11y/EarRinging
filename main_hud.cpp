@@ -65,6 +65,14 @@ static float g_Panel[4]    = { -1, -1, -1, -1 };
 static int   g_PanelCol[4] = { 0, 0, 0, 60 };
 static int   g_ArmorAlways = 1;     // draw an empty armor bar even when the player has no armor
 static float g_StarScale   = 1.0f;  // size of the wanted stars
+static float g_ClockScale = 1.0f, g_MoneyScale = 1.0f, g_AmmoScale = 1.0f;   // text size multipliers (1.0 = the game's own)
+// colours "r g b a" (-1 = keep the game's own)
+static int g_ClockCol[4]  = { -1, -1, -1, -1 };
+static int g_MoneyCol[4]  = { -1, -1, -1, -1 };
+static int g_AmmoCol[4]   = { -1, -1, -1, -1 };
+static int g_TextBg[4]    = { -1, -1, -1, -1 };   // dark box behind clock / money / ammo
+static int g_HealthCol[4] = { -1, -1, -1, -1 };
+static int g_ArmorCol[4]  = { -1, -1, -1, -1 };
 // weapon icon rectangle (left, bottom, right, top) in screen pixels; set all four to use it
 static float g_WIcon[4] = { -1, -1, -1, -1 };
 // ammo rectangle passed to DrawAmmo (optional)
@@ -119,7 +127,7 @@ static void WriteDefaultIni(const std::string& path)
           "WeaponIconRect=-1 -1 -1 -1\n"
           "AmmoRect=-1 -1 -1 -1\n"
           "; Align: 0 = X as the game gives it (right edge), 1 = X is the left edge of the text\n"
-          "ClockAlign=0\nMoneyAlign=0\nAmmoAlign=0\nWantedSpacing=1.0\nStarScale=1.0\n"
+          "ClockAlign=0\nMoneyAlign=0\nAmmoAlign=0\nWantedSpacing=1.0\nStarScale=1.0\nClockScale=1.0\nMoneyScale=1.0\nAmmoScale=1.0\n"
           "PanelRect=-1 -1 -1 -1\nPanelColor=0 0 0 60\nArmorAlways=1\n"
           , f);
     fclose(f);
@@ -162,6 +170,15 @@ static void LoadConfig()
         else if (!strcmp(k, "PanelColor"))     sscanf(v, "%d %d %d %d", &g_PanelCol[0], &g_PanelCol[1], &g_PanelCol[2], &g_PanelCol[3]);
         else if (!strcmp(k, "ArmorAlways"))    g_ArmorAlways = atoi(v);
         else if (!strcmp(k, "StarScale"))      g_StarScale = (float)atof(v);
+        else if (!strcmp(k, "ClockColor"))     sscanf(v, "%d %d %d %d", &g_ClockCol[0], &g_ClockCol[1], &g_ClockCol[2], &g_ClockCol[3]);
+        else if (!strcmp(k, "MoneyColor"))     sscanf(v, "%d %d %d %d", &g_MoneyCol[0], &g_MoneyCol[1], &g_MoneyCol[2], &g_MoneyCol[3]);
+        else if (!strcmp(k, "AmmoColor"))      sscanf(v, "%d %d %d %d", &g_AmmoCol[0], &g_AmmoCol[1], &g_AmmoCol[2], &g_AmmoCol[3]);
+        else if (!strcmp(k, "TextBackground")) sscanf(v, "%d %d %d %d", &g_TextBg[0], &g_TextBg[1], &g_TextBg[2], &g_TextBg[3]);
+        else if (!strcmp(k, "HealthColor"))    sscanf(v, "%d %d %d %d", &g_HealthCol[0], &g_HealthCol[1], &g_HealthCol[2], &g_HealthCol[3]);
+        else if (!strcmp(k, "ArmorColor"))     sscanf(v, "%d %d %d %d", &g_ArmorCol[0], &g_ArmorCol[1], &g_ArmorCol[2], &g_ArmorCol[3]);
+        else if (!strcmp(k, "ClockScale"))     g_ClockScale = (float)atof(v);
+        else if (!strcmp(k, "MoneyScale"))     g_MoneyScale = (float)atof(v);
+        else if (!strcmp(k, "AmmoScale"))      g_AmmoScale  = (float)atof(v);
         else if (!strcmp(k, "WeaponIconRect")) ParseRect(v, g_WIcon);
         else if (!strcmp(k, "AmmoRect"))       ParseRect(v, g_ARect);
     }
@@ -235,6 +252,32 @@ static SetScale_t g_SetScale = nullptr;
 static uint8_t* g_FontDetails = nullptr;   // CFont::Details; the raw scale given to SetScale is stored at +8
 typedef float (*GetStringWidth_t)(uint16_t*, uint8_t, uint8_t);
 static GetStringWidth_t g_GetStringWidth = nullptr;
+typedef void (*SetColor_t)(const CRGBA*);
+typedef void (*SetBackground_t)(uint8_t, uint8_t);
+static SetColor_t g_SetColor = nullptr, g_SetBackgroundColor = nullptr;
+static SetBackground_t g_SetBackground = nullptr;
+static void ApplyStyle(const int* col)
+{
+    if (col[0] >= 0 && g_SetColor)
+    {
+        CRGBA c = { (uint8_t)col[0], (uint8_t)col[1], (uint8_t)col[2], (uint8_t)(col[3] < 0 ? 255 : col[3]) };
+        g_SetColor(&c);
+    }
+    if (g_TextBg[0] >= 0 && g_SetBackground && g_SetBackgroundColor)
+    {
+        CRGBA b = { (uint8_t)g_TextBg[0], (uint8_t)g_TextBg[1], (uint8_t)g_TextBg[2], (uint8_t)(g_TextBg[3] < 0 ? 255 : g_TextBg[3]) };
+        g_SetBackgroundColor(&b);
+        g_SetBackground(1, 0);
+    }
+}
+static void ScaleText(float mult)
+{
+    if (mult != 1.0f && g_SetScale && g_FontDetails)
+    {
+        float base = *(float*)(g_FontDetails + 8);      // raw scale the game just set
+        if (base > 0.0f) g_SetScale(base * mult);
+    }
+}
 static float g_WantedFirstX = -1e9f;
 static float g_StarBase = 0.0f;
 
@@ -263,6 +306,7 @@ static void PrintString_hook(float x, float y, uint16_t* text)
         else if (g_Ctx == CTX_AMMO)
         {
             what = "ammo";
+            ScaleText(g_AmmoScale); ApplyStyle(g_AmmoCol);
             if (g_AmmoX >= 0) { nx = g_AmmoX; if (g_AmmoAlign == 1 && g_GetStringWidth) { w = g_GetStringWidth(text, 1, 0); nx += w; } }
             if (g_AmmoY >= 0) ny = g_AmmoY;
         }
@@ -271,12 +315,14 @@ static void PrintString_hook(float x, float y, uint16_t* text)
             if (strchr(s, ':'))
             {
                 what = "clock";
+                ScaleText(g_ClockScale); ApplyStyle(g_ClockCol);
                 if (g_ClockX >= 0) { nx = g_ClockX; if (g_ClockAlign == 1 && g_GetStringWidth) { w = g_GetStringWidth(text, 1, 0); nx += w; } }
                 if (g_ClockY >= 0) ny = g_ClockY;
             }
             else
             {
                 what = "money";
+                ScaleText(g_MoneyScale); ApplyStyle(g_MoneyCol);
                 if (g_MoneyX >= 0) { nx = g_MoneyX; if (g_MoneyAlign == 1 && g_GetStringWidth) { w = g_GetStringWidth(text, 1, 0); nx += w; } }
                 if (g_MoneyY >= 0) ny = g_MoneyY;
             }
@@ -299,9 +345,11 @@ static DrawBarChart_t g_BarOrig = nullptr;
 struct BarData { bool seen = false; float pct = 0; int8_t prog = 0; uint8_t b1 = 1, b2 = 1; CRGBA c1{0,200,0,255}, c2{0,0,0,255}; };
 static BarData g_BarHealth, g_BarArmor;
 
-static void DrawOwnBar(const float* r, const BarData& d)
+static void DrawOwnBar(const float* r, const BarData& d, const int* col)
 {
-    g_BarOrig(r[0], r[1], (uint16_t)r[2], (uint8_t)r[3], d.pct, d.prog, d.b1, d.b2, &d.c1, &d.c2);
+    CRGBA c1 = d.c1;
+    if (col[0] >= 0) c1 = { (uint8_t)col[0], (uint8_t)col[1], (uint8_t)col[2], (uint8_t)(col[3] < 0 ? 255 : col[3]) };
+    g_BarOrig(r[0], r[1], (uint16_t)r[2], (uint8_t)r[3], d.pct, d.prog, d.b1, d.b2, &c1, &d.c2);
 }
 
 typedef void (*PlayerInfoDraw_t)(void*);
@@ -322,17 +370,17 @@ static void InfoDraw_hook(void* self)
     if (g_Enable && g_BarOrig)
     {
         // bars the game wanted to draw were captured (not drawn) -> draw them at our rectangles
-        if (g_BarH[0] >= 0 && g_BarHealth.seen) DrawOwnBar(g_BarH, g_BarHealth);
+        if (g_BarH[0] >= 0 && g_BarHealth.seen) DrawOwnBar(g_BarH, g_BarHealth, g_HealthCol);
         if (g_BarA[0] >= 0)
         {
-            if (g_BarArmor.seen) DrawOwnBar(g_BarA, g_BarArmor);
+            if (g_BarArmor.seen) DrawOwnBar(g_BarA, g_BarArmor, g_ArmorCol);
             else if (g_ArmorAlways)
             {
                 BarData e = g_BarHealth;                 // same border / shadow flags as health
                 e.pct = 0; e.prog = 0;
                 e.c1 = { 200, 200, 200, 255 };
                 e.c2 = { 110, 110, 110, 255 };
-                DrawOwnBar(g_BarA, e);
+                DrawOwnBar(g_BarA, e, g_ArmorCol);
             }
         }
     }
@@ -434,6 +482,10 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     LOGI("RwRenderStateSet=%p DrawRect=%p", (void*)g_RwRS, (void*)g_DrawRect);
     g_SetScale   = (SetScale_t)ResolveExact("_ZN5CFont8SetScaleEf");
     g_FontDetails = (uint8_t*)ResolveExact("_ZN5CFont7DetailsE");
+    g_SetColor           = (SetColor_t)ResolveExact("_ZN5CFont8SetColorE5CRGBA");
+    g_SetBackgroundColor = (SetColor_t)ResolveExact("_ZN5CFont18SetBackgroundColorE5CRGBA");
+    g_SetBackground      = (SetBackground_t)ResolveExact("_ZN5CFont13SetBackgroundEhh");
+    LOGI("SetColor=%p SetBackground=%p SetBackgroundColor=%p", (void*)g_SetColor, (void*)g_SetBackground, (void*)g_SetBackgroundColor);
     LOGI("SetScale=%p Details=%p", (void*)g_SetScale, (void*)g_FontDetails);
     Install("_ZN5CFont11PrintStringEffPt",                           (void*)PrintString_hook,  &g_PrintStringOrig);
     Install("_ZN17CWidgetPlayerInfo4DrawEv",                         (void*)InfoDraw_hook,     &g_InfoDrawOrig);
