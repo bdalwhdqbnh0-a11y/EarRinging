@@ -51,6 +51,11 @@ static float g_MoneyX   = -1, g_MoneyY   = -1;
 // wanted stars are drawn one by one, so they move by an OFFSET (added to the game's own x/y)
 static float g_WantedDX = 0, g_WantedDY = 0;
 static float g_AmmoX    = -1, g_AmmoY    = -1;
+// text alignment of the X value: 0 = raw (what the game passes, right edge for these texts),
+// 1 = X is the LEFT edge of the text (right edge = X + text width)
+static int   g_ClockAlign = 0, g_MoneyAlign = 0, g_AmmoAlign = 0;
+// wanted stars: WantedSpacing stretches the distance between stars (1.0 = the game's own)
+static float g_WantedSpacing = 1.0f;
 // bars: x y width height (absolute pixels, -1 = keep)
 static float g_BarH[4] = { -1, -1, -1, -1 };
 static float g_BarA[4] = { -1, -1, -1, -1 };
@@ -107,7 +112,10 @@ static void WriteDefaultIni(const std::string& path)
           "; bars: x y width height  (-1 -1 -1 -1 = keep)\nHealthBar=-1 -1 -1 -1\nArmorBar=-1 -1 -1 -1\nBreathBar=-1 -1 -1 -1\n"
           "; rectangles: left bottom right top  (leave -1 -1 -1 -1 to keep the game's own)\n"
           "WeaponIconRect=-1 -1 -1 -1\n"
-          "AmmoRect=-1 -1 -1 -1\n", f);
+          "AmmoRect=-1 -1 -1 -1\n"
+          "; Align: 0 = X as the game gives it (right edge), 1 = X is the left edge of the text\n"
+          "ClockAlign=0\nMoneyAlign=0\nAmmoAlign=0\nWantedSpacing=1.0\n"
+          , f);
     fclose(f);
 }
 
@@ -140,6 +148,10 @@ static void LoadConfig()
         else if (!strcmp(k, "BreathBar"))      ParseRect(v, g_BarB);
         else if (!strcmp(k, "AmmoX"))          g_AmmoX   = (float)atof(v);
         else if (!strcmp(k, "AmmoY"))          g_AmmoY   = (float)atof(v);
+        else if (!strcmp(k, "ClockAlign"))     g_ClockAlign = atoi(v);
+        else if (!strcmp(k, "MoneyAlign"))     g_MoneyAlign = atoi(v);
+        else if (!strcmp(k, "AmmoAlign"))      g_AmmoAlign  = atoi(v);
+        else if (!strcmp(k, "WantedSpacing"))  g_WantedSpacing = (float)atof(v);
         else if (!strcmp(k, "WeaponIconRect")) ParseRect(v, g_WIcon);
         else if (!strcmp(k, "AmmoRect"))       ParseRect(v, g_ARect);
     }
@@ -208,6 +220,10 @@ static void ToAscii(const uint16_t* t, char* out, size_t n)
     out[i] = 0;
 }
 
+typedef float (*GetStringWidth_t)(uint16_t*, uint8_t, uint8_t);
+static GetStringWidth_t g_GetStringWidth = nullptr;
+static float g_WantedFirstX = -1e9f;
+
 typedef void (*PrintString_t)(float, float, uint16_t*);
 static PrintString_t g_PrintStringOrig = nullptr;
 static void PrintString_hook(float x, float y, uint16_t* text)
@@ -217,15 +233,37 @@ static void PrintString_hook(float x, float y, uint16_t* text)
         char s[64]; ToAscii(text, s, sizeof(s));
         float nx = x, ny = y;
         const char* what = "text";
-        if (g_Ctx == CTX_WANTED)      { what = "wanted"; nx = x + g_WantedDX; ny = y + g_WantedDY; }
-        else if (g_Ctx == CTX_AMMO)   { what = "ammo";   if (g_AmmoX   >= 0) nx = g_AmmoX;   if (g_AmmoY   >= 0) ny = g_AmmoY; }
+        float w = 0.0f;
+        if (g_Ctx == CTX_WANTED)
+        {
+            what = "wanted";
+            if (g_WantedFirstX < -1e8f) g_WantedFirstX = x;
+            nx = g_WantedFirstX + (x - g_WantedFirstX) * g_WantedSpacing + g_WantedDX;
+            ny = y + g_WantedDY;
+        }
+        else if (g_Ctx == CTX_AMMO)
+        {
+            what = "ammo";
+            if (g_AmmoX >= 0) { nx = g_AmmoX; if (g_AmmoAlign == 1 && g_GetStringWidth) { w = g_GetStringWidth(text, 1, 0); nx += w; } }
+            if (g_AmmoY >= 0) ny = g_AmmoY;
+        }
         else if (g_Ctx == CTX_INFO)
         {
-            if (strchr(s, ':'))        { what = "clock"; if (g_ClockX >= 0) nx = g_ClockX; if (g_ClockY >= 0) ny = g_ClockY; }
-            else                        { what = "money"; if (g_MoneyX >= 0) nx = g_MoneyX; if (g_MoneyY >= 0) ny = g_MoneyY; }
+            if (strchr(s, ':'))
+            {
+                what = "clock";
+                if (g_ClockX >= 0) { nx = g_ClockX; if (g_ClockAlign == 1 && g_GetStringWidth) { w = g_GetStringWidth(text, 1, 0); nx += w; } }
+                if (g_ClockY >= 0) ny = g_ClockY;
+            }
+            else
+            {
+                what = "money";
+                if (g_MoneyX >= 0) { nx = g_MoneyX; if (g_MoneyAlign == 1 && g_GetStringWidth) { w = g_GetStringWidth(text, 1, 0); nx += w; } }
+                if (g_MoneyY >= 0) ny = g_MoneyY;
+            }
         }
         if (LOGLIM(g_Ctx))
-            LOGI("PrintString ctx=%s kind=%s x=%.1f y=%.1f -> x=%.1f y=%.1f text='%s'", CtxName(g_Ctx), what, x, y, nx, ny, s);
+            LOGI("PrintString ctx=%s kind=%s x=%.1f y=%.1f -> x=%.1f y=%.1f w=%.1f text='%s'", CtxName(g_Ctx), what, x, y, nx, ny, w, s);
         x = nx; y = ny;
     }
     g_PrintStringOrig(x, y, text);
@@ -245,6 +283,7 @@ static DrawWanted_t g_DrawWantedOrig = nullptr;
 static void DrawWanted_hook(void* self)
 {
     int old = g_Ctx; g_Ctx = CTX_WANTED;
+    g_WantedFirstX = -1e9f;
     g_DrawWantedOrig(self);
     g_Ctx = old;
 }
@@ -318,6 +357,8 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     LoadConfig();
     if (!g_Enable) { LOGI("Enable=0, nothing hooked"); return; }
 
+    g_GetStringWidth = (GetStringWidth_t)ResolveExact("_ZN5CFont14GetStringWidthEPthh");
+    LOGI("GetStringWidth=%p", (void*)g_GetStringWidth);
     Install("_ZN5CFont11PrintStringEffPt",                           (void*)PrintString_hook,  &g_PrintStringOrig);
     Install("_ZN17CWidgetPlayerInfo4DrawEv",                         (void*)InfoDraw_hook,     &g_InfoDrawOrig);
     Install("_ZN17CWidgetPlayerInfo10DrawWantedEv",                  (void*)DrawWanted_hook,   &g_DrawWantedOrig);
