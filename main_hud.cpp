@@ -426,34 +426,36 @@ static bool g_IconIsRed = false;
 
 static void SetIconColor(const int* col)   // nullptr = restore the game's own white
 {
-    // two code paths draw the icon (CSprite::RenderOneXLUSprite and CSprite2d::Draw);
-    // each sets the colour with three "orr wN, wzr, #0xff" instructions
-    static const uint32_t orig[3] = { 0x32001fe1, 0x32001fe2, 0x32001fe3 };
-    static const uintptr_t bases[2] = { 0x37dd94, 0x37ddcc };
+    // Two code paths draw the icon. Each one sets the colour with "orr wN, wzr, #0xff" instructions:
+    //   path A (CSprite::RenderOneXLUSprite): r = w0, g = w1, b = w2  (w3 is the intensity: left alone)
+    //   path B (CSprite2d::Draw, CRGBA ctor): r = w1, g = w2, b = w3
+    struct P { uintptr_t addr; int rd; int ch; uint32_t orig; };
+    static const P patches[6] = {
+        { 0x37dd68, 0, 0, 0x32001fe0 }, { 0x37dd94, 1, 1, 0x32001fe1 }, { 0x37dd98, 2, 2, 0x32001fe2 },
+        { 0x37ddcc, 1, 0, 0x32001fe1 }, { 0x37ddd0, 2, 1, 0x32001fe2 }, { 0x37ddd4, 3, 2, 0x32001fe3 },
+    };
     if (!g_Bias) g_Bias = GetBias();
     if (!g_Bias) { g_IconPatchOK = 0; return; }
-    uint32_t* a[6];
-    for (int k = 0; k < 2; ++k) for (int i = 0; i < 3; ++i) a[k * 3 + i] = (uint32_t*)(g_Bias + bases[k] + 4 * i);
     if (g_IconPatchOK < 0)
     {
         bool ok = true;
-        for (int k = 0; k < 6; ++k) if (*a[k] != orig[k % 3]) ok = false;
+        for (int k = 0; k < 6; ++k) if (*(uint32_t*)(g_Bias + patches[k].addr) != patches[k].orig) ok = false;
         g_IconPatchOK = ok ? 1 : 0;
-        LOGI("icon colour patch: %s (%08x %08x %08x / %08x %08x %08x)", ok ? "ok" : "UNUSABLE", *a[0], *a[1], *a[2], *a[3], *a[4], *a[5]);
+        LOGI("icon colour patch: %s", ok ? "ok" : "UNUSABLE");
     }
     if (g_IconPatchOK != 1) return;
-    uint32_t nw[3];
-    for (int i = 0; i < 3; ++i)
+    uintptr_t page = (g_Bias + 0x37dd68) & ~(uintptr_t)4095;
+    mprotect((void*)page, 4096 * 2, PROT_READ | PROT_WRITE | PROT_EXEC);
+    for (int k = 0; k < 6; ++k)
     {
-        int c = col ? col[i] : 255;
+        int c = col ? col[patches[k].ch] : 255;
         if (c < 0) c = 0;
         if (c > 255) c = 255;
-        nw[i] = col ? (0x52800000u | ((uint32_t)c << 5) | (uint32_t)(1 + i)) : orig[i];   // movz wN, #c
+        uint32_t nw = col ? (0x52800000u | ((uint32_t)c << 5) | (uint32_t)patches[k].rd) : patches[k].orig;   // movz wN, #c
+        uint32_t* a = (uint32_t*)(g_Bias + patches[k].addr);
+        if (*a != nw) *a = nw;
     }
-    uintptr_t page = (uintptr_t)a[0] & ~(uintptr_t)4095;
-    mprotect((void*)page, 4096 * 2, PROT_READ | PROT_WRITE | PROT_EXEC);
-    for (int k = 0; k < 6; ++k) if (*a[k] != nw[k % 3]) *a[k] = nw[k % 3];
-    __builtin___clear_cache((char*)a[0], (char*)a[0] + 0x40);
+    __builtin___clear_cache((char*)(g_Bias + 0x37dd68), (char*)(g_Bias + 0x37ddd8));
     mprotect((void*)page, 4096 * 2, PROT_READ | PROT_EXEC);
 }
 
