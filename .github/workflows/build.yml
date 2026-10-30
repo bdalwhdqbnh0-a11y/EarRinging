@@ -31,3 +31,9 @@ jobs:
         with:
           name: EarRinging-arm64
           path: build/libEarRinging.so
+
+      - name: Upload MyHUD
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyHUD-arm64
+          path: build/libMyHUD.so
