@@ -426,28 +426,34 @@ static bool g_IconIsRed = false;
 
 static void SetIconColor(const int* col)   // nullptr = restore the game's own white
 {
-    static const uint32_t orig[3] = { 0x32001fe1, 0x32001fe2, 0x32001fe3 };   // orr w1/w2/w3, wzr, #0xff
-    const uintptr_t base = 0x37ddcc;
+    // two code paths draw the icon (CSprite::RenderOneXLUSprite and CSprite2d::Draw);
+    // each sets the colour with three "orr wN, wzr, #0xff" instructions
+    static const uint32_t orig[3] = { 0x32001fe1, 0x32001fe2, 0x32001fe3 };
+    static const uintptr_t bases[2] = { 0x37dd94, 0x37ddcc };
     if (!g_Bias) g_Bias = GetBias();
     if (!g_Bias) { g_IconPatchOK = 0; return; }
-    uint32_t* a[3] = { (uint32_t*)(g_Bias + base), (uint32_t*)(g_Bias + base + 4), (uint32_t*)(g_Bias + base + 8) };
+    uint32_t* a[6];
+    for (int k = 0; k < 2; ++k) for (int i = 0; i < 3; ++i) a[k * 3 + i] = (uint32_t*)(g_Bias + bases[k] + 4 * i);
     if (g_IconPatchOK < 0)
     {
-        g_IconPatchOK = (*a[0] == orig[0] && *a[1] == orig[1] && *a[2] == orig[2]) ? 1 : 0;
-        LOGI("icon colour patch: %s (%08x %08x %08x)", g_IconPatchOK ? "ok" : "UNUSABLE", *a[0], *a[1], *a[2]);
+        bool ok = true;
+        for (int k = 0; k < 6; ++k) if (*a[k] != orig[k % 3]) ok = false;
+        g_IconPatchOK = ok ? 1 : 0;
+        LOGI("icon colour patch: %s (%08x %08x %08x / %08x %08x %08x)", ok ? "ok" : "UNUSABLE", *a[0], *a[1], *a[2], *a[3], *a[4], *a[5]);
     }
     if (g_IconPatchOK != 1) return;
     uint32_t nw[3];
     for (int i = 0; i < 3; ++i)
     {
         int c = col ? col[i] : 255;
-        if (c < 0) c = 0; if (c > 255) c = 255;
+        if (c < 0) c = 0;
+        if (c > 255) c = 255;
         nw[i] = col ? (0x52800000u | ((uint32_t)c << 5) | (uint32_t)(1 + i)) : orig[i];   // movz wN, #c
     }
     uintptr_t page = (uintptr_t)a[0] & ~(uintptr_t)4095;
     mprotect((void*)page, 4096 * 2, PROT_READ | PROT_WRITE | PROT_EXEC);
-    for (int i = 0; i < 3; ++i) if (*a[i] != nw[i]) *a[i] = nw[i];
-    __builtin___clear_cache((char*)a[0], (char*)a[0] + 12);
+    for (int k = 0; k < 6; ++k) if (*a[k] != nw[k % 3]) *a[k] = nw[k % 3];
+    __builtin___clear_cache((char*)a[0], (char*)a[0] + 0x40);
     mprotect((void*)page, 4096 * 2, PROT_READ | PROT_EXEC);
 }
 
