@@ -20,3 +20,10 @@ target_include_directories(MyHUD PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(MyHUD PRIVATE -O2 -Wno-unused-function)
 target_link_libraries(MyHUD log dl m)
+
+# --- SanVive (extra weapon animation groups) ---
+add_library(SanVive SHARED main_sanvive.cpp ${AML_SOURCES})
+target_include_directories(SanVive PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(SanVive PRIVATE -O2 -Wno-unused-function)
+target_link_libraries(SanVive log dl m)
