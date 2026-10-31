@@ -277,7 +277,7 @@ static void CreateGroups_hook(void* self)
     AddGroups();          // skips groups that are already defined
     g_CreateGroupsOrig(self);
     static int diag = 0;
-    if (diag++ < 2 && g_GetBlock && g_GetAnim && g_GetAssoc)
+    if (diag++ < 0 && g_GetBlock && g_GetAnim && g_GetAssoc)
     {
         void* blk = g_GetBlock("AR15");
         char hex[200] = {0}; int o = 0;
@@ -287,7 +287,7 @@ static void CreateGroups_hook(void* self)
         for (auto n : names)
             LOGI("DIAG %s: hierarchy=%p  assoc139=%p assoc140=%p", n, blk ? g_GetAnim(n, blk) : nullptr, g_GetAssoc(139, n), g_GetAssoc(140, n));
     }
-    static bool dumped = false;
+    static bool dumped = true;
     if (!dumped)
     {
         dumped = true;
@@ -331,6 +331,62 @@ static void LoadWeaponData_hook()
     }
 }
 
+// ---------------------------------------------------------------- weapon model frames (diagnostics)
+typedef const char* (*GetFrameNodeName_t)(void*);
+typedef void* (*FrameForAllChildren_t)(void*, void* (*)(void*, void*), void*);
+typedef void* (*FindPlayerPed_t)(int);
+static GetFrameNodeName_t g_FrameName = nullptr;
+static FrameForAllChildren_t g_ForChildren = nullptr;
+static FindPlayerPed_t g_FindPlayerPed = nullptr;
+
+struct DumpCtx { int depth; int* budget; };
+static void* DumpFrame(void* frame, void* data);
+static void DumpTree(void* frame, int depth, int* budget)
+{
+    if (!frame || *budget <= 0) return;
+    --*budget;
+    const char* nm = g_FrameName ? g_FrameName(frame) : "?";
+    float* m = (float*)((uint8_t*)frame + 0x10);       // RwMatrix: right(0) up(4) at(8) pos(12), 16-byte rows
+    char ind[24]; int n = depth < 20 ? depth : 20; memset(ind, ' ', n); ind[n] = 0;
+    LOGI("FRAME %s%s  pos=(%.4f %.4f %.4f) right=(%.3f %.3f %.3f) up=(%.3f %.3f %.3f) at=(%.3f %.3f %.3f)",
+         ind, nm ? nm : "(null)", m[12], m[13], m[14], m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]);
+    DumpCtx c = { depth + 1, budget };
+    g_ForChildren(frame, DumpFrame, &c);
+}
+static void* DumpFrame(void* frame, void* data)
+{
+    DumpCtx* c = (DumpCtx*)data;
+    DumpTree(frame, c->depth, c->budget);
+    return frame;
+}
+
+typedef void (*PedRender_t)(void*);
+static PedRender_t g_PedRenderOrig = nullptr;
+static void PedRender_hook(void* ped)
+{
+    static int lastState = -1, dumps = 0;
+    if (g_FindPlayerPed && g_FrameName && g_ForChildren && ped == g_FindPlayerPed(0))
+    {
+        void* clump = *(void**)((uint8_t*)ped + 0x650);          // CPed::m_pWeaponObject (RpClump*)
+        int8_t slot = *(int8_t*)((uint8_t*)ped + 0x8dc);
+        if (clump && slot >= 0 && slot < 13)
+        {
+            const uint8_t* wp = (const uint8_t*)ped + 0x730 + slot * 32;
+            int type = *(const int*)wp, state = *(const int*)(wp + 4);
+            if (type == g_AkType && state != lastState && dumps < 6)
+            {
+                lastState = state; ++dumps;
+                void* root = *(void**)((uint8_t*)clump + 8);       // RwObject::parent = RwFrame*
+                LOGI("== weapon model dump: type=%d state=%d clump=%p frame=%p", type, state, clump, root);
+                int budget = 80;
+                DumpTree(root, 0, &budget);
+            }
+            else if (type != g_AkType) lastState = -1;
+        }
+    }
+    g_PedRenderOrig(ped);
+}
+
 template <class T> static bool Install(const char* sym, void* hook, T* orig)
 {
     uintptr_t a = ResolveExact(sym);
@@ -368,6 +424,11 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
          (void*)g_StreamClose, (void*)g_Defs, (void*)g_NumDefs, g_StdDescs);
     if (!g_AddDef || !g_AddAnim || !g_RegBlock || !g_LoadAnim || !g_StreamOpen || !g_StreamClose || !g_Defs || !g_NumDefs || !g_StdDescs)
     { LOGE("missing symbols, nothing hooked"); return; }
+    g_FrameName     = (GetFrameNodeName_t)ResolveExact("_Z16GetFrameNodeNameP7RwFrame");
+    g_ForChildren   = (FrameForAllChildren_t)ResolveExact("_Z21RwFrameForAllChildrenP7RwFramePFS0_S0_PvES1_");
+    g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
+    LOGI("FrameName=%p ForChildren=%p FindPlayerPed=%p", (void*)g_FrameName, (void*)g_ForChildren, (void*)g_FindPlayerPed);
+    Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
     Install("_ZN12CAnimManager21CreateAnimAssocGroupsEv", (void*)CreateGroups_hook, &g_CreateGroupsOrig);
     Install("_ZN11CWeaponInfo14LoadWeaponDataEv", (void*)LoadWeaponData_hook, &g_LoadWeaponDataOrig);
 }
