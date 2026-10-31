@@ -50,6 +50,27 @@ static float g_ClockX   = -1, g_ClockY   = -1;
 static float g_MoneyX   = -1, g_MoneyY   = -1;
 // wanted stars are drawn one by one, so they move by an OFFSET (added to the game's own x/y)
 static float g_WantedDX = 0, g_WantedDY = 0;
+static int   g_HideStars = 0;
+static float g_NameX = -1, g_NameY = -1, g_NameScale = 1.0f;
+static int   g_NameCol[4] = { 255, 255, 255, 255 };
+static int   g_CurType = -1;
+static float g_ClockBase = 0.0f;
+static const char* WeaponName(int t)
+{
+    switch (t) {
+    case 0: return "FIST"; case 1: return "KNUCKLES"; case 2: return "GOLF CLUB"; case 3: return "NIGHTSTICK";
+    case 4: return "KNIFE"; case 5: return "BAT"; case 6: return "SHOVEL"; case 7: return "POOL CUE";
+    case 8: return "KATANA"; case 9: return "CHAINSAW"; case 10: case 11: case 12: case 13: return "TOY";
+    case 14: return "FLOWERS"; case 15: return "CANE"; case 16: return "GRENADE"; case 17: return "TEAR GAS";
+    case 18: return "MOLOTOV"; case 22: return "PISTOL"; case 23: return "SILENCED"; case 24: return "DESERT EAGLE";
+    case 25: return "SHOTGUN"; case 26: return "SAWN-OFF"; case 27: return "SPAS-12"; case 28: return "MICRO SMG";
+    case 29: return "MP5"; case 30: return "AK-47"; case 31: return "M4"; case 32: return "TEC-9";
+    case 33: return "RIFLE"; case 34: return "SNIPER"; case 35: return "RPG"; case 36: return "HS ROCKET";
+    case 37: return "FLAMETHROWER"; case 38: return "MINIGUN"; case 39: return "SATCHEL"; case 40: return "DETONATOR";
+    case 41: return "SPRAY CAN"; case 42: return "EXTINGUISHER"; case 43: return "CAMERA"; case 44: return "NIGHT VISION";
+    case 45: return "THERMAL"; case 46: return "PARACHUTE"; }
+    return nullptr;
+}
 static float g_AmmoX    = -1, g_AmmoY    = -1;
 // text alignment of the X value: 0 = raw (what the game passes, right edge for these texts),
 // 1 = X is the LEFT edge of the text (right edge = X + text width)
@@ -197,6 +218,11 @@ static void LoadConfig()
         else if (!strcmp(k, "ArmorColor"))     sscanf(v, "%d %d %d %d", &g_ArmorCol[0], &g_ArmorCol[1], &g_ArmorCol[2], &g_ArmorCol[3]);
         else if (!strcmp(k, "WeaponEmptyColor"))  sscanf(v, "%d %d %d", &g_EmptyCol[0], &g_EmptyCol[1], &g_EmptyCol[2]);
         else if (!strcmp(k, "WeaponReloadColor")) sscanf(v, "%d %d %d", &g_ReloadCol[0], &g_ReloadCol[1], &g_ReloadCol[2]);
+        else if (!strcmp(k, "HideStars"))      g_HideStars = atoi(v);
+        else if (!strcmp(k, "NameX"))          g_NameX = (float)atof(v);
+        else if (!strcmp(k, "NameY"))          g_NameY = (float)atof(v);
+        else if (!strcmp(k, "NameScale"))      g_NameScale = (float)atof(v);
+        else if (!strcmp(k, "NameColor"))      sscanf(v, "%d %d %d %d", &g_NameCol[0], &g_NameCol[1], &g_NameCol[2], &g_NameCol[3]);
         else if (!strcmp(k, "ClockScale"))     g_ClockScale = (float)atof(v);
         else if (!strcmp(k, "MoneyScale"))     g_MoneyScale = (float)atof(v);
         else if (!strcmp(k, "AmmoScale"))      g_AmmoScale  = (float)atof(v);
@@ -315,6 +341,7 @@ static void PrintString_hook(float x, float y, uint16_t* text)
         if (g_Ctx == CTX_WANTED)
         {
             what = "wanted";
+            if (g_HideStars) return;
             if (g_WantedFirstX < -1e8f) g_WantedFirstX = x;
             nx = g_WantedFirstX + (x - g_WantedFirstX) * g_WantedSpacing + g_WantedDX;
             ny = y + g_WantedDY;
@@ -336,6 +363,7 @@ static void PrintString_hook(float x, float y, uint16_t* text)
             if (strchr(s, ':'))
             {
                 what = "clock";
+                if (g_FontDetails) g_ClockBase = *(float*)(g_FontDetails + 8);
                 ScaleText(g_ClockScale); ApplyStyle(g_ClockCol);
                 if (g_ClockX >= 0) { nx = g_ClockX; if (g_ClockAlign == 1 && g_GetStringWidth) { w = g_GetStringWidth(text, 1, 0); nx += w; } }
                 if (g_ClockY >= 0) ny = g_ClockY;
@@ -351,6 +379,23 @@ static void PrintString_hook(float x, float y, uint16_t* text)
         if (LOGLIM(g_Ctx))
             LOGI("PrintString ctx=%s kind=%s x=%.1f y=%.1f -> x=%.1f y=%.1f w=%.1f text='%s'", CtxName(g_Ctx), what, x, y, nx, ny, w, s);
         x = nx; y = ny;
+        g_PrintStringOrig(x, y, text);
+        if (!strcmp(what, "clock") && g_NameX >= 0 && g_NameY >= 0 && g_SetScale && g_ClockBase > 0.0f)
+        {
+            const char* nm = WeaponName(g_CurType);
+            if (nm)
+            {
+                uint16_t wb[40]; int i = 0;
+                for (; nm[i] && i < 39; ++i) wb[i] = (uint8_t)nm[i];
+                wb[i] = 0;
+                g_SetScale(g_ClockBase * g_NameScale);
+                ApplyStyle(g_NameCol);
+                float nx2 = g_NameX;
+                if (g_GetStringWidth) nx2 += g_GetStringWidth(wb, 1, 0);
+                g_PrintStringOrig(nx2, g_NameY, wb);
+            }
+        }
+        return;
     }
     g_PrintStringOrig(x, y, text);
 }
@@ -556,6 +601,7 @@ static void DrawWeapon_hook(void* self, void* ped, CRect r, float f)
         {
             const uint8_t* wp = (const uint8_t*)ped + 0x730 + slot * 32;
             int type = *(const int*)wp, state = *(const int*)(wp + 4), clip = *(const int*)(wp + 8), total = *(const int*)(wp + 12);
+            g_CurType = type;
             bool ammoWeapon = type >= 16 && type <= 45;
             red = ammoWeapon && ((g_RedOnReload && state == 2) || (g_RedOnEmpty && (total <= 0 || state == 3)));
             if (LOGLIM(8 + CTX_HEALTH) && ammoWeapon)
