@@ -105,8 +105,8 @@ static uintptr_t ResolveExact(const char* name)
 // ---------------------------------------------------------------- settings (SanVive.ini)
 static std::vector<std::string> g_Groups = { "ar15", "ar15bad" };   // groups to add
 static std::vector<std::string> g_Blocks = { "ar15" };              // ifp blocks to load (anims/<name>.ifp)
-static int  g_AkOffset = -1;      // byte offset in CWeaponInfo of the anim group id (-1 = only log)
-static std::string g_AkGroup = "ar15";
+static int  g_AkOffset = 0x1c;    // byte offset in CWeaponInfo of the anim group id (0x1c, found in the log)
+static std::string g_AkGroup = "ar15", g_AkGroupPoor = "ar15bad";
 static int  g_AkType = 30;
 
 static void SplitList(const char* v, std::vector<std::string>& out)
@@ -129,7 +129,7 @@ static void LoadConfig()
         f = fopen(path.c_str(), "w");
         if (f)
         {
-            fputs("[Settings]\nGroups=ar15,ar15bad\nBlocks=ar15\nAkType=30\nAkGroup=ar15\n; byte offset of the anim group in the weapon data (-1 = only write the log)\nAkOffset=-1\n", f);
+            fputs("[Settings]\nGroups=ar15,ar15bad\nBlocks=ar15\nAkType=30\nAkGroup=ar15\nAkGroupPoor=ar15bad\n; byte offset of the anim group in the weapon data\nAkOffset=28\n", f);
             fclose(f);
         }
         return;
@@ -143,9 +143,10 @@ static void LoadConfig()
         while (*k == ' ') ++k;
         if (!strcmp(k, "Groups")) SplitList(v, g_Groups);
         else if (!strcmp(k, "Blocks")) SplitList(v, g_Blocks);
-        else if (!strcmp(k, "AkOffset")) g_AkOffset = atoi(v);
+        else if (!strcmp(k, "AkOffset")) { int o = atoi(v); if (o > 0) g_AkOffset = o; }
         else if (!strcmp(k, "AkType")) g_AkType = atoi(v);
         else if (!strcmp(k, "AkGroup")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroup = t[0]; }
+        else if (!strcmp(k, "AkGroupPoor")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroupPoor = t[0]; }
     }
     fclose(f);
 }
@@ -246,8 +247,8 @@ static void CreateGroups_hook(void* self)
     {
         g_Done = true;
         for (auto& b : g_Blocks) LoadBlock(b);
-        AddGroups();
     }
+    AddGroups();          // skips groups that are already defined
     g_CreateGroupsOrig(self);
     LOGI("groups created");
 }
@@ -258,19 +259,22 @@ static void LoadWeaponData_hook()
 {
     g_LoadWeaponDataOrig();
     if (!g_GetWeaponInfo) return;
+    static int calls = 0; ++calls;
     for (int skill = 0; skill < 3; ++skill)
     {
         uint8_t* wi = (uint8_t*)g_GetWeaponInfo(g_AkType, (int8_t)skill);
         if (!wi) continue;
         char buf[512]; int o = 0;
         for (int i = 0; i < 0x70; i += 4) o += snprintf(buf + o, sizeof(buf) - o, "%02x:%d ", i, *(int*)(wi + i));
-        LOGI("weapon %d skill %d (%p) words: %s", g_AkType, skill, (void*)wi, buf);
-        int id = FindDef(g_AkGroup.c_str());
-        if (g_AkOffset >= 0 && id >= 0)
+        if (calls == 1) LOGI("weapon %d skill %d (%p) words: %s", g_AkType, skill, (void*)wi, buf);
+        const std::string& gname = (skill == 0) ? g_AkGroupPoor : g_AkGroup;
+        int id = FindDef(gname.c_str());
+        if (g_AkOffset > 0 && id >= 0)
         {
-            LOGI("  set +0x%x = %d (group '%s')", g_AkOffset, id, g_AkGroup.c_str());
+            LOGI("  skill %d: +0x%x was %d, now %d (group '%s')", skill, g_AkOffset, *(int*)(wi + g_AkOffset), id, gname.c_str());
             *(int*)(wi + g_AkOffset) = id;
         }
+        else LOGI("  skill %d: group '%s' not defined yet, AK left as it is", skill, gname.c_str());
     }
 }
 
