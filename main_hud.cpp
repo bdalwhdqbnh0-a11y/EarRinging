@@ -66,6 +66,12 @@ static int   g_PanelCol[4] = { 0, 0, 0, 60 };
 static int   g_ArmorAlways = 1;     // draw an empty armor bar even when the player has no armor
 static float g_StarScale   = 1.0f;  // size of the wanted stars
 static float g_ClockScale = 1.0f, g_MoneyScale = 1.0f, g_AmmoScale = 1.0f;   // text size multipliers (1.0 = the game's own)
+// row of small ticks above the armor bar = bullets left in the magazine
+static float g_BulletsRect[4] = { -1, -1, -1, -1 };      // left bottom right top
+static int   g_BulletsLit[4]  = { 190, 190, 185, 255 };
+static int   g_BulletsDim[4]  = { 50, 50, 50, 150 };
+static int   g_BulletsMax     = 40;                      // at most this many ticks
+static int   g_ClipNow = 0, g_ClipMax = 0; static bool g_ClipValid = false;
 // weapon icon turns red when reloading / out of ammo
 static int g_RedOnReload = 0, g_RedOnEmpty = 0;
 static int g_RedCol[3] = { 255, 40, 40 };
@@ -176,6 +182,10 @@ static void LoadConfig()
         else if (!strcmp(k, "PanelColor"))     sscanf(v, "%d %d %d %d", &g_PanelCol[0], &g_PanelCol[1], &g_PanelCol[2], &g_PanelCol[3]);
         else if (!strcmp(k, "ArmorAlways"))    g_ArmorAlways = atoi(v);
         else if (!strcmp(k, "StarScale"))      g_StarScale = (float)atof(v);
+        else if (!strcmp(k, "BulletsRect"))    ParseRect(v, g_BulletsRect);
+        else if (!strcmp(k, "BulletsColor"))   sscanf(v, "%d %d %d %d", &g_BulletsLit[0], &g_BulletsLit[1], &g_BulletsLit[2], &g_BulletsLit[3]);
+        else if (!strcmp(k, "BulletsDimColor")) sscanf(v, "%d %d %d %d", &g_BulletsDim[0], &g_BulletsDim[1], &g_BulletsDim[2], &g_BulletsDim[3]);
+        else if (!strcmp(k, "BulletsMax"))     g_BulletsMax = atoi(v);
         else if (!strcmp(k, "RedOnReload"))    g_RedOnReload = atoi(v);
         else if (!strcmp(k, "RedOnEmpty"))     g_RedOnEmpty  = atoi(v);
         else if (!strcmp(k, "RedColor"))       sscanf(v, "%d %d %d", &g_RedCol[0], &g_RedCol[1], &g_RedCol[2]);
@@ -377,7 +387,26 @@ static void InfoDraw_hook(void* self)
         CRGBA pc = { (uint8_t)g_PanelCol[0], (uint8_t)g_PanelCol[1], (uint8_t)g_PanelCol[2], (uint8_t)g_PanelCol[3] };
         g_DrawRect(pr, pc);
     }
+    g_ClipValid = false;
     g_InfoDrawOrig(self);
+    if (g_Enable && g_BulletsRect[0] >= 0 && g_ClipValid && g_ClipMax > 1 && g_RwRS && g_DrawRect)
+    {
+        int n = g_ClipMax < g_BulletsMax ? g_ClipMax : g_BulletsMax;
+        int lit = (g_ClipNow * n + g_ClipMax - 1) / g_ClipMax;          // round up
+        if (g_ClipNow <= 0) lit = 0;
+        if (lit > n) lit = n;
+        float pitch = (g_BulletsRect[2] - g_BulletsRect[0]) / (float)n;
+        g_RwRS(1, nullptr);
+        g_RwRS(7, (void*)1);
+        for (int i = 0; i < n; ++i)
+        {
+            const int* c = (i < lit) ? g_BulletsLit : g_BulletsDim;
+            CRGBA col = { (uint8_t)c[0], (uint8_t)c[1], (uint8_t)c[2], (uint8_t)c[3] };
+            float x0 = g_BulletsRect[0] + pitch * i;
+            CRect tr = { x0, g_BulletsRect[1], x0 + pitch * 0.62f, g_BulletsRect[3] };
+            g_DrawRect(tr, col);
+        }
+    }
     if (g_Enable && g_BarOrig)
     {
         // bars the game wanted to draw were captured (not drawn) -> draw them at our rectangles
@@ -420,6 +449,10 @@ static uintptr_t GetBias()
     }, &b);
     return b;
 }
+typedef void* (*GetWeaponInfo_t)(int, int8_t);
+typedef int8_t (*GetWeaponSkill_t)(void*);
+static GetWeaponInfo_t g_GetWeaponInfo = nullptr;
+static GetWeaponSkill_t g_GetWeaponSkill = nullptr;
 static uintptr_t g_Bias = 0;
 static int g_IconPatchOK = -1;       // -1 not checked, 0 unusable, 1 ok
 static bool g_IconIsRed = false;
@@ -515,7 +548,7 @@ static void DrawWeapon_hook(void* self, void* ped, CRect r, float f)
             else if (st == 1 && g_EmptyCol[0] >= 0) g_WeaponTint = g_EmptyCol;
         }
     }
-    if (g_Enable && (g_RedOnReload || g_RedOnEmpty) && ped)
+    if (g_Enable && ped)
     {
         bool red = false;
         int8_t slot = *(int8_t*)((uintptr_t)ped + 0x8dc);
@@ -527,8 +560,15 @@ static void DrawWeapon_hook(void* self, void* ped, CRect r, float f)
             red = ammoWeapon && ((g_RedOnReload && state == 2) || (g_RedOnEmpty && (total <= 0 || state == 3)));
             if (LOGLIM(8 + CTX_HEALTH) && ammoWeapon)
                 LOGI("weapon type=%d state=%d clip=%d total=%d red=%d", type, state, clip, total, (int)red);
+            if (ammoWeapon && g_GetWeaponInfo && g_GetWeaponSkill)
+            {
+                void* wi = g_GetWeaponInfo(type, g_GetWeaponSkill(ped));
+                int maxClip = wi ? (int)*(const uint16_t*)((const uint8_t*)wi + 0x20) : 0;
+                if (!(maxClip > 1 && maxClip < 1000)) { static int seen = 0, seenT = -1; if (seenT != type) { seen = 0; seenT = type; } if (clip > seen) seen = clip; maxClip = seen; }
+                if (maxClip > 1 && maxClip < 1000) { g_ClipNow = clip; g_ClipMax = maxClip; g_ClipValid = true; }
+            }
         }
-        if (red != g_IconIsRed) { SetIconColor(red ? g_RedCol : nullptr); g_IconIsRed = red; }
+        if ((g_RedOnReload || g_RedOnEmpty) && red != g_IconIsRed) { SetIconColor(red ? g_RedCol : nullptr); g_IconIsRed = red; }
     }
     int old = g_Ctx; g_Ctx = CTX_WEAPON;
     g_DrawWeaponOrig(self, ped, r, f);
@@ -592,6 +632,9 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
 
     g_GetStringWidth = (GetStringWidth_t)ResolveExact("_ZN5CFont14GetStringWidthEPthh");
     LOGI("GetStringWidth=%p", (void*)g_GetStringWidth);
+    g_GetWeaponInfo  = (GetWeaponInfo_t)ResolveExact("_ZN11CWeaponInfo13GetWeaponInfoE11eWeaponTypea");
+    g_GetWeaponSkill = (GetWeaponSkill_t)ResolveExact("_ZN4CPed14GetWeaponSkillEv");
+    LOGI("GetWeaponInfo=%p GetWeaponSkill=%p", (void*)g_GetWeaponInfo, (void*)g_GetWeaponSkill);
     g_RwRS    = (RwRenderStateSet_t)ResolveExact("_Z16RwRenderStateSet13RwRenderStatePv");
     g_DrawRect = (DrawRect_t)ResolveExact("_ZN9CSprite2d8DrawRectERK5CRectRK5CRGBA");
     LOGI("RwRenderStateSet=%p DrawRect=%p", (void*)g_RwRS, (void*)g_DrawRect);
