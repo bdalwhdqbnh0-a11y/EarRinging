@@ -272,6 +272,21 @@ static void CreateGroups_hook(void* self)
         for (auto n : names)
             LOGI("DIAG %s: hierarchy=%p  assoc139=%p assoc140=%p", n, blk ? g_GetAnim(n, blk) : nullptr, g_GetAssoc(139, n), g_GetAssoc(140, n));
     }
+    static bool dumped = false;
+    if (!dumped)
+    {
+        dumped = true;
+        for (int i = 0; i < *g_NumDefs; ++i)
+        {
+            uint8_t* d = g_Defs + i * DEF_SIZE;
+            int cnt = *(int*)(d + 0x24);
+            char** names = *(char***)(d + 0x28);
+            char an[300]; an[0] = 0; int o = 0;
+            if (names && cnt > 0 && cnt < 400)
+                for (int k = 0; k < cnt && k < 10 && o < 250; ++k) o += snprintf(an + o, sizeof(an) - o, "%s,", names[k]);
+            LOGI("DEF %d '%s' block '%s' w20=%u count=%d descs=%p anims: %s", i, (const char*)d, (const char*)(d + 0x10), *(unsigned*)(d + 0x20), cnt, *(void**)(d + 0x30), an);
+        }
+    }
     LOGI("groups created");
 }
 
