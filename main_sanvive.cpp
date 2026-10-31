@@ -184,21 +184,26 @@ static bool Wanted(const std::vector<std::string>& l, const char* n)
     return false;
 }
 
+struct RwMemory { uint8_t* start; uint32_t length; };
 static void LoadBlock(const std::string& name)
 {
     std::string path = g_Dir + "anims/" + name + ".ifp";
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) { LOGE("ifp not found: %s", path.c_str()); return; }
-    char hdr[32] = {0};
-    fread(hdr, 1, 32, f); fclose(f);
-    if (memcmp(hdr, "ANP3", 4) != 0) { LOGE("%s is not ANP3", path.c_str()); return; }
-    char block[25] = {0}; memcpy(block, hdr + 8, 24);
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (sz < 36 || sz > 64 * 1024 * 1024) { fclose(f); LOGE("bad size %ld: %s", sz, path.c_str()); return; }
+    std::vector<uint8_t> data(sz);
+    size_t rd = fread(data.data(), 1, sz, f); fclose(f);
+    if ((long)rd != sz) { LOGE("short read: %s", path.c_str()); return; }
+    if (memcmp(data.data(), "ANP3", 4) != 0) { LOGE("%s is not ANP3", path.c_str()); return; }
+    char block[25] = {0}; memcpy(block, data.data() + 8, 24);
     void* b = g_RegBlock(block);
-    void* st = g_StreamOpen(2, 1, path.c_str());
-    if (!st) { LOGE("RwStreamOpen failed: %s", path.c_str()); return; }
+    RwMemory mem = { data.data(), (uint32_t)sz };
+    void* st = g_StreamOpen(3 /*rwSTREAMMEMORY*/, 1 /*read*/, &mem);
+    if (!st) { LOGE("RwStreamOpen(memory) failed: %s", path.c_str()); return; }
     g_LoadAnim(st, false, nullptr);
     g_StreamClose(st, nullptr);
-    LOGI("loaded ifp block '%s' (registered=%p) from %s", block, b, path.c_str());
+    LOGI("loaded ifp block '%s' (registered=%p, %ld bytes) from %s", block, b, sz, path.c_str());
 }
 
 static void AddGroups()
