@@ -107,6 +107,7 @@ static std::vector<std::string> g_Groups = { "ar15", "ar15bad" };   // groups to
 static std::vector<std::string> g_Blocks = { "ar15" };              // ifp blocks to load (anims/<name>.ifp)
 static int  g_AkOffset = 0x1c;    // byte offset in CWeaponInfo of the anim group id (0x1c, found in the log)
 static std::string g_AkGroup = "ar15", g_AkGroupPoor = "ar15bad";
+static std::string g_Template = "rifle", g_TemplateBad = "riflebad";   // vanilla groups whose descriptor table we copy
 static int  g_AkType = 30;
 
 static void SplitList(const char* v, std::vector<std::string>& out)
@@ -146,6 +147,8 @@ static void LoadConfig()
         else if (!strcmp(k, "AkOffset")) { int o = atoi(v); if (o > 0) g_AkOffset = o; }
         else if (!strcmp(k, "AkType")) g_AkType = atoi(v);
         else if (!strcmp(k, "AkGroup")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroup = t[0]; }
+        else if (!strcmp(k, "Template")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_Template = t[0]; }
+        else if (!strcmp(k, "TemplateBad")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_TemplateBad = t[0]; }
         else if (!strcmp(k, "AkGroupPoor")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroupPoor = t[0]; }
     }
     fclose(f);
@@ -240,7 +243,19 @@ static void AddGroups()
             if (strlen(a) > 15 || strlen(b) > 15) { LOGE("name too long: %s / %s", a, b); continue; }
             if (FindDef(a) >= 0) { LOGI("group '%s' already exists, skipped", a); continue; }
             if (*g_NumDefs >= DEF_MAX - 1) { LOGE("definition table full"); continue; }
-            cur = g_AddDef(a, b, 7, (unsigned)n, g_StdDescs);
+            size_t la = strlen(a);
+            bool bad = la >= 3 && !strcasecmp(a + la - 3, "bad");
+            int ti = FindDef((bad ? g_TemplateBad : g_Template).c_str());
+            unsigned type = 7; void* descs = g_StdDescs;
+            if (ti >= 0)
+            {
+                uint8_t* t = g_Defs + ti * DEF_SIZE;
+                type = *(unsigned*)(t + 0x20);
+                descs = *(void**)(t + 0x30);
+            }
+            else LOGE("template group '%s' not found, using the default table", (bad ? g_TemplateBad : g_Template).c_str());
+            LOGI("  descriptor table for '%s' copied from '%s': %p", a, (bad ? g_TemplateBad : g_Template).c_str(), descs);
+            cur = g_AddDef(a, b, type, (unsigned)n, descs);
             skip = false; ++added;
             LOGI("group '%s' block '%s' anims=%d -> id %d", a, b, n, FindDef(a));
         }
@@ -278,6 +293,7 @@ static void CreateGroups_hook(void* self)
         dumped = true;
         for (int i = 0; i < *g_NumDefs; ++i)
         {
+            if (i >= 11 && i <= 32 ? false : i < 139) continue;
             uint8_t* d = g_Defs + i * DEF_SIZE;
             int cnt = *(int*)(d + 0x24);
             char** names = *(char***)(d + 0x28);
