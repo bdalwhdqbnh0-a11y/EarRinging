@@ -167,6 +167,12 @@ static LoadAnimFile_t g_LoadAnim = nullptr;
 static RwStreamOpen_t g_StreamOpen = nullptr;
 static RwStreamClose_t g_StreamClose = nullptr;
 static GetWeaponInfo_t g_GetWeaponInfo = nullptr;
+typedef void* (*GetBlock_t)(const char*);
+typedef void* (*GetAnim_t)(const char*, const void*);
+typedef void* (*GetAssocByName_t)(int, const char*);
+static GetBlock_t g_GetBlock = nullptr;
+static GetAnim_t g_GetAnim = nullptr;
+static GetAssocByName_t g_GetAssoc = nullptr;
 static uint8_t* g_Defs = nullptr;     // CAnimManager::ms_aAnimAssocDefinitions (56-byte entries, name at +0)
 static int* g_NumDefs = nullptr;      // ms_numAnimAssocDefinitions
 static void* g_StdDescs = nullptr;    // aStdAnimDescs
@@ -255,6 +261,17 @@ static void CreateGroups_hook(void* self)
     }
     AddGroups();          // skips groups that are already defined
     g_CreateGroupsOrig(self);
+    static int diag = 0;
+    if (diag++ < 2 && g_GetBlock && g_GetAnim && g_GetAssoc)
+    {
+        void* blk = g_GetBlock("AR15");
+        char hex[200] = {0}; int o = 0;
+        if (blk) for (int i = 0; i < 0x30; i += 4) o += snprintf(hex + o, sizeof(hex) - o, "%02x:%08x ", i, *(uint32_t*)((uint8_t*)blk + i));
+        LOGI("DIAG block AR15 = %p  %s", blk, hex);
+        static const char* names[] = { "AR15_fire", "AR15_crouchfire", "AR15_load", "AR15_crouchload", "AR15_fire_poor" };
+        for (auto n : names)
+            LOGI("DIAG %s: hierarchy=%p  assoc139=%p assoc140=%p", n, blk ? g_GetAnim(n, blk) : nullptr, g_GetAssoc(139, n), g_GetAssoc(140, n));
+    }
     LOGI("groups created");
 }
 
@@ -308,6 +325,10 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_StreamOpen  = (RwStreamOpen_t)ResolveExact("_Z12RwStreamOpen12RwStreamType18RwStreamAccessTypePKv");
     g_StreamClose = (RwStreamClose_t)ResolveExact("_Z13RwStreamCloseP8RwStreamPv");
     g_GetWeaponInfo = (GetWeaponInfo_t)ResolveExact("_ZN11CWeaponInfo13GetWeaponInfoE11eWeaponTypea");
+    g_GetBlock    = (GetBlock_t)ResolveExact("_ZN12CAnimManager17GetAnimationBlockEPKc");
+    g_GetAnim     = (GetAnim_t)ResolveExact("_ZN12CAnimManager12GetAnimationEPKcPK10CAnimBlock");
+    g_GetAssoc    = (GetAssocByName_t)ResolveExact("_ZN12CAnimManager18GetAnimAssociationE12AssocGroupIdPKc");
+    LOGI("GetBlock=%p GetAnim=%p GetAssoc=%p", (void*)g_GetBlock, (void*)g_GetAnim, (void*)g_GetAssoc);
     g_Defs        = (uint8_t*)ResolveExact("_ZN12CAnimManager24ms_aAnimAssocDefinitionsE");
     g_NumDefs     = (int*)ResolveExact("_ZN12CAnimManager26ms_numAnimAssocDefinitionsE");
     g_StdDescs    = (void*)ResolveExact("aStdAnimDescs");
