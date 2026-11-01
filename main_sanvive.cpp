@@ -116,6 +116,7 @@ static float g_ReloadMs = 1000.f;                      // used only when the rea
 static float g_MagDrop = 0.30f, g_MagOut1 = 0.16f, g_MagOut2 = 0.22f, g_MagIn1 = 0.50f, g_MagIn2 = 0.88f;
 static int   g_UseFbx = 1;
 static float g_FbxSwap = 52.f, g_FbxScale = 1.f;   // sample where the new magazine replaces the old one
+static float g_ReloadSpeed = 0.45f;               // playback speed of the reload animation (1 = normal)
 static int   g_Hands = 1;                         // FBX hands: 0 off, 1 during reload
 static int   g_UseHand = 1, g_HandBone = 34;
 static float g_HandGrab = 0.12f, g_HandRelease = 0.40f, g_HandNew = 0.68f, g_HandInsert = 0.86f, g_HandEnd = 0.93f;
@@ -183,6 +184,7 @@ static void LoadConfig()
         else if (!strcmp(k, "HoldX")) g_Hold[0] = (float)atof(v);
         else if (!strcmp(k, "HoldY")) g_Hold[1] = (float)atof(v);
         else if (!strcmp(k, "HoldZ")) g_Hold[2] = (float)atof(v);
+        else if (!strcmp(k, "ReloadSpeed")) { g_ReloadSpeed = (float)atof(v); if (g_ReloadSpeed < 0.1f) g_ReloadSpeed = 0.1f; if (g_ReloadSpeed > 2.f) g_ReloadSpeed = 2.f; }
         else if (!strcmp(k, "Hands")) g_Hands = atoi(v);
         else if (!strcmp(k, "UseHand")) g_UseHand = atoi(v);
         else if (!strcmp(k, "HandBone")) g_HandBone = atoi(v);
@@ -393,6 +395,8 @@ typedef float* (*GetLTM_t)(void*);
 static GetLTM_t g_GetLTM = nullptr;
 typedef void (*GetBone_t)(void*, float*, unsigned, bool);
 static GetBone_t g_GetBone = nullptr;
+typedef void* (*GetAssocId_t)(void*, unsigned);
+static GetAssocId_t g_GetAssocId = nullptr;
 static uint32_t* g_TimerMs = nullptr;                 // CTimer::m_snTimeInMilliseconds
 
 struct Parts { void* clump = nullptr; void* root = nullptr; void* hr[10] = {0}; void* hl[10] = {0}; void *mag = nullptr, *trig = nullptr, *bolt = nullptr; float magP[3] = {0}, trigP[3] = {0}, boltP[3] = {0}; };
@@ -1027,7 +1031,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         float d = 0;
         if (g_TimerMs) d = (float)(int)(*(const uint32_t*)(wp + 0x10) - *g_TimerMs);
         if (d >= 300.f && d <= 8000.f) lastGoodDur = d;
-        reloadDur = lastGoodDur > 0 ? lastGoodDur : g_ReloadMs;
+        reloadDur = (lastGoodDur > 0 ? lastGoodDur : g_ReloadMs) / g_ReloadSpeed;
         ++g_HandLogs;
         LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
     }
@@ -1035,6 +1039,19 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; rackTime = now; }
     lastState = state;
     bool reloading = reloadActive;
+    if (reloading && g_ReloadSpeed != 1.f && g_GetAssocId)
+    {
+        void* pc = *(void**)((uint8_t*)ped + 0x20);
+        static int speedLogs = 0;
+        for (unsigned id = 226; id <= 227 && pc; ++id)
+        {
+            uint8_t* a = (uint8_t*)g_GetAssocId(pc, id);
+            if (!a) continue;
+            float* sp = (float*)(a + 0x3C);
+            if (speedLogs < 6) { ++speedLogs; LOGI("reload anim id %u: time=%.3f speed=%.3f", id, *(float*)(a + 0x38), *sp); }
+            if (*sp > 0.05f && *sp < 5.f) *sp = g_ReloadSpeed;
+        }
+    }
     float p = 0, tRel = 0;
     if (reloading) { tRel = (float)(now - reloadStart); p = reloadDur > 0 ? tRel / reloadDur : 1.f; if (p > 1) p = 1; }
     float tShot = shotTime ? (float)(now - shotTime) : 100000.f;
@@ -1212,6 +1229,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
     LOGI("FrameName=%p ForChildren=%p FindPlayerPed=%p", (void*)g_FrameName, (void*)g_ForChildren, (void*)g_FindPlayerPed);
     g_FrameUpdate   = (FrameUpdateObjects_t)ResolveExact("_Z20RwFrameUpdateObjectsP7RwFrame");
+    g_GetAssocId    = (GetAssocId_t)ResolveExact("_Z30RpAnimBlendClumpGetAssociationP7RpClumpj");
     g_GetBone       = (GetBone_t)ResolveExact("_ZN4CPed15GetBonePositionER5RwV3djb");
     g_GetLTM        = (GetLTM_t)ResolveExact("_Z13RwFrameGetLTMP7RwFrame");
     g_TimerMs       = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
