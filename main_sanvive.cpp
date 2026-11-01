@@ -117,8 +117,8 @@ static float g_MagDrop = 0.30f, g_MagOut1 = 0.16f, g_MagOut2 = 0.22f, g_MagIn1 =
 static int   g_UseFbx = 1;
 static float g_FbxSwap = 52.f, g_FbxScale = 1.f;   // sample where the new magazine replaces the old one
 static int   g_UseHand = 1, g_HandBone = 34;
-static float g_HandGrab = 0.20f, g_HandRelease = 0.40f, g_HandNew = 0.52f, g_HandInsert = 0.72f, g_HandEnd = 0.88f;
-static float g_DropDist = 0.90f, g_FallMs = 700.f;
+static float g_HandGrab = 0.12f, g_HandRelease = 0.40f, g_HandNew = 0.68f, g_HandInsert = 0.86f, g_HandEnd = 0.93f;
+static float g_DropDist = 0.80f, g_FallMs = 300.f;
 static float g_BoltAt = 0.90f, g_BoltBack = -0.074f;
 static float g_TrigAngle = 0.5948f;                    // radians (34 deg), from the pack's trigger/finalpos
 static float g_FireBoltStart = 50, g_FireBoltHold = 25, g_FireBoltEnd = 50;
@@ -745,7 +745,8 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         ++g_HandLogs;
         LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
     }
-    if (reloadActive && state != 2 && now - lastIn2 > 200) reloadActive = false;
+    static uint32_t rackTime = 0;
+    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; rackTime = now; }
     lastState = state;
     bool reloading = reloadActive;
     float p = 0, tRel = 0;
@@ -754,6 +755,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
 
     float trig = Profile(tShot, g_TrigStart, g_TrigHold, g_TrigEnd);
     float bolt = Profile(tShot, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
+    if (rackTime && !reloading) { float rb2 = Profile((float)(now - rackTime), g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd); if (rb2 > bolt) bolt = rb2; }
     float dz = 0, scale = 1;
     bool falling = false;
     bool fbx = reloading && g_UseFbx;
@@ -835,7 +837,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
             }
         }
     }
-    if (g_P.bolt) SetOffset(g_P.bolt, g_P.boltP, g_BoltBack * bolt + (fbx ? FbxBolt(kf) * g_FbxScale : 0.f), 0, 0, 1);
+    if (g_P.bolt) SetOffset(g_P.bolt, g_P.boltP, g_BoltBack * bolt, 0, 0, 1);
     if (g_P.trig)
     {
         float a = g_TrigAngle * trig, c = cosf(a), s = sinf(a);
