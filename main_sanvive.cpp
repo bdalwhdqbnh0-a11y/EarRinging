@@ -116,6 +116,7 @@ static float g_ReloadMs = 1000.f;                      // used only when the rea
 static float g_MagDrop = 0.30f, g_MagOut1 = 0.16f, g_MagOut2 = 0.22f, g_MagIn1 = 0.50f, g_MagIn2 = 0.88f;
 static int   g_UseFbx = 1;
 static float g_FbxSwap = 52.f, g_FbxScale = 1.f;   // sample where the new magazine replaces the old one
+static int   g_ExtendReload = 1;
 static float g_ReloadSpeed = 0.45f;               // playback speed of the reload animation (1 = normal)
 static int   g_Hands = 1;                         // FBX hands: 0 off, 1 during reload
 static int   g_UseHand = 1, g_HandBone = 34;
@@ -184,6 +185,7 @@ static void LoadConfig()
         else if (!strcmp(k, "HoldX")) g_Hold[0] = (float)atof(v);
         else if (!strcmp(k, "HoldY")) g_Hold[1] = (float)atof(v);
         else if (!strcmp(k, "HoldZ")) g_Hold[2] = (float)atof(v);
+        else if (!strcmp(k, "ExtendReload")) g_ExtendReload = atoi(v);
         else if (!strcmp(k, "ReloadSpeed")) { g_ReloadSpeed = (float)atof(v); if (g_ReloadSpeed < 0.1f) g_ReloadSpeed = 0.1f; if (g_ReloadSpeed > 2.f) g_ReloadSpeed = 2.f; }
         else if (!strcmp(k, "Hands")) g_Hands = atoi(v);
         else if (!strcmp(k, "UseHand")) g_UseHand = atoi(v);
@@ -1036,6 +1038,16 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
     }
     static uint32_t rackTime = 0;
+    // keep the weapon in the reloading state for the whole (slowed) animation: push the weapon's ready-time forward
+    static uint32_t gStart = 0; static int extLogs = 0;
+    if (state == 2 && g_TimerMs && g_ExtendReload)
+    {
+        if (reloadActive && gStart == 0) gStart = *g_TimerMs;
+        uint32_t want = gStart + (uint32_t)reloadDur;
+        uint32_t* tf = (uint32_t*)(wp + 0x10);
+        if (*tf < want && *tf + 20000 > want) { if (extLogs < 4) { ++extLogs; LOGI("reload timer %u -> %u (game time %u)", *tf, want, *g_TimerMs); } *tf = want; }
+    }
+    if (state != 2) gStart = 0;
     if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; rackTime = now; }
     lastState = state;
     bool reloading = reloadActive;
