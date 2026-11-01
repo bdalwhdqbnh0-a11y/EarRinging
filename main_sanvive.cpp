@@ -1019,6 +1019,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     static uint32_t reloadStart = 0, shotTime = 0;
     static float reloadDur = 0;
     static bool dirty = false;
+    static uint32_t rackTime = 0; static bool racked = false;
     uint32_t now = NowMs();
     int clip = *(const int*)(wp + 8);
     if (lastClip >= 0 && clip < lastClip && state != 2) shotTime = now;
@@ -1034,10 +1035,9 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (g_TimerMs) d = (float)(int)(*(const uint32_t*)(wp + 0x10) - *g_TimerMs);
         if (d >= 300.f && d <= 8000.f) lastGoodDur = d;
         reloadDur = (lastGoodDur > 0 ? lastGoodDur : g_ReloadMs) / g_ReloadSpeed;
-        ++g_HandLogs;
+        ++g_HandLogs; rackTime = 0; racked = false;
         LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
     }
-    static uint32_t rackTime = 0;
     // keep the weapon in the reloading state for the whole (slowed) animation: push the weapon's ready-time forward
     static uint32_t gStart = 0; static int extLogs = 0;
     if (state == 2 && g_TimerMs && g_ExtendReload)
@@ -1048,7 +1048,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (*tf < want && *tf + 20000 > want) { if (extLogs < 4) { ++extLogs; LOGI("reload timer %u -> %u (game time %u)", *tf, want, *g_TimerMs); } *tf = want; }
     }
     if (state != 2) gStart = 0;
-    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; rackTime = now; }
+    if (reloadActive && state != 2 && now - lastIn2 > 200) reloadActive = false;
     lastState = state;
     bool reloading = reloadActive;
     if (reloading && g_ReloadSpeed != 1.f && g_GetAssocId)
@@ -1066,11 +1066,12 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     }
     float p = 0, tRel = 0;
     if (reloading) { tRel = (float)(now - reloadStart); p = reloadDur > 0 ? tRel / reloadDur : 1.f; if (p > 1) p = 1; }
+    if (reloading && !racked && p >= 0.97f) { racked = true; rackTime = now; }
     float tShot = shotTime ? (float)(now - shotTime) : 100000.f;
 
     float trig = Profile(tShot, g_TrigStart, g_TrigHold, g_TrigEnd);
     float bolt = Profile(tShot, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
-    if (rackTime && !reloading) { float rb2 = Profile((float)(now - rackTime), g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd); if (rb2 > bolt) bolt = rb2; }
+    if (rackTime) { float rb2 = Profile((float)(now - rackTime), g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd); if (rb2 > bolt) bolt = rb2; }
     float dz = 0, scale = 1;
     bool falling = false;
     bool fbx = reloading && g_UseFbx;
@@ -1163,7 +1164,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
             }
         }
     }
-    if (g_Hands) ApplyHands(reloading, kf);
+    if (g_Hands) ApplyHands(reloading && p < 0.99f, kf);
     if (g_P.bolt) SetOffset(g_P.bolt, g_P.boltP, g_BoltBack * bolt, 0, 0, 1);
     if (g_P.trig)
     {
