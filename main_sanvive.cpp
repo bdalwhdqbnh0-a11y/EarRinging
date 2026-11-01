@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 #include <strings.h>
+#include <cmath>
+#include <ctime>
 
 MYMODCFG(net.sanvive.mod, SanVive Anim, 0.1.0, Custom)
 
@@ -108,6 +110,16 @@ static std::vector<std::string> g_Blocks = { "ar15" };              // ifp block
 static int  g_AkOffset = 0x1c;    // byte offset in CWeaponInfo of the anim group id (0x1c, found in the log)
 static std::string g_AkGroup = "ar15", g_AkGroupPoor = "ar15bad";
 static std::string g_Template = "rifle", g_TemplateBad = "riflebad";   // vanilla groups whose descriptor table we copy
+// settings (SanVive.ini)
+static int   g_Animate = 1;
+static float g_ReloadMs = 2400.f;                      // used only when the real reload time can't be read
+static float g_MagDrop = 0.30f, g_MagOut1 = 0.16f, g_MagOut2 = 0.22f, g_MagIn1 = 0.50f, g_MagIn2 = 0.88f;
+static float g_BoltAt = 0.90f, g_BoltBack = -0.074f;
+static float g_TrigAngle = 0.5948f;                    // radians (34 deg), from the pack's trigger/finalpos
+static float g_FireBoltStart = 50, g_FireBoltHold = 25, g_FireBoltEnd = 50;
+static float g_ReloadBoltStart = 50, g_ReloadBoltHold = 200, g_ReloadBoltEnd = 50;
+static float g_TrigStart = 100, g_TrigHold = 50, g_TrigEnd = 100;
+
 static int  g_AkType = 30;
 
 static void SplitList(const char* v, std::vector<std::string>& out)
@@ -149,6 +161,15 @@ static void LoadConfig()
         else if (!strcmp(k, "AkGroup")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroup = t[0]; }
         else if (!strcmp(k, "Template")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_Template = t[0]; }
         else if (!strcmp(k, "TemplateBad")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_TemplateBad = t[0]; }
+        else if (!strcmp(k, "Animate")) g_Animate = atoi(v);
+        else if (!strcmp(k, "ReloadMs")) g_ReloadMs = (float)atof(v);
+        else if (!strcmp(k, "MagDrop")) g_MagDrop = (float)atof(v);
+        else if (!strcmp(k, "MagOut1")) g_MagOut1 = (float)atof(v);
+        else if (!strcmp(k, "MagOut2")) g_MagOut2 = (float)atof(v);
+        else if (!strcmp(k, "MagIn1")) g_MagIn1 = (float)atof(v);
+        else if (!strcmp(k, "MagIn2")) g_MagIn2 = (float)atof(v);
+        else if (!strcmp(k, "BoltAt")) g_BoltAt = (float)atof(v);
+        else if (!strcmp(k, "BoltBack")) g_BoltBack = (float)atof(v);
         else if (!strcmp(k, "AkGroupPoor")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroupPoor = t[0]; }
     }
     fclose(f);
@@ -331,41 +352,117 @@ static void LoadWeaponData_hook()
     }
 }
 
-// ---------------------------------------------------------------- weapon model frames (diagnostics)
+// ---------------------------------------------------------------- weapon model parts (magazine / bolt / trigger)
 typedef const char* (*GetFrameNodeName_t)(void*);
 typedef void* (*FrameForAllChildren_t)(void*, void* (*)(void*, void*), void*);
 typedef void* (*FindPlayerPed_t)(int);
+typedef void* (*FrameUpdateObjects_t)(void*);
 static GetFrameNodeName_t g_FrameName = nullptr;
 static FrameForAllChildren_t g_ForChildren = nullptr;
 static FindPlayerPed_t g_FindPlayerPed = nullptr;
+static FrameUpdateObjects_t g_FrameUpdate = nullptr;
+static uint32_t* g_TimerMs = nullptr;                 // CTimer::m_snTimeInMilliseconds
 
-struct DumpCtx { int depth; int* budget; };
-static void* DumpFrame(void* frame, void* data);
-static void DumpTree(void* frame, int depth, int* budget)
+struct Parts { void* clump = nullptr; void *mag = nullptr, *trig = nullptr, *bolt = nullptr; float magP[3] = {0}, trigP[3] = {0}, boltP[3] = {0}; };
+static Parts g_P;
+
+static void CollectFrame(void* f, Parts* p);
+static void* CollectCb(void* f, void* d) { CollectFrame(f, (Parts*)d); return f; }
+static void CollectFrame(void* f, Parts* p)
 {
-    if (!frame || *budget <= 0) return;
-    --*budget;
-    const char* nm = g_FrameName ? g_FrameName(frame) : "?";
-    float* m = (float*)((uint8_t*)frame + 0x10);       // RwMatrix: right(0) up(4) at(8) pos(12), 16-byte rows
-    char ind[24]; int n = depth < 20 ? depth : 20; memset(ind, ' ', n); ind[n] = 0;
-    LOGI("FRAME %s%s  pos=(%.4f %.4f %.4f) right=(%.3f %.3f %.3f) up=(%.3f %.3f %.3f) at=(%.3f %.3f %.3f)",
-         ind, nm ? nm : "(null)", m[12], m[13], m[14], m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]);
-    DumpCtx c = { depth + 1, budget };
-    g_ForChildren(frame, DumpFrame, &c);
+    if (!f) return;
+    const char* nm = g_FrameName(f);
+    float* m = (float*)((uint8_t*)f + 0x20);           // RwFrame::modelling (RwMatrix: right, flags, up, pad, at, pad, pos)
+    if (nm)
+    {
+        if (!p->mag  && !strcmp(nm, "magazine")) { p->mag  = f; memcpy(p->magP,  m + 12, 12); }
+        if (!p->trig && !strcmp(nm, "trigger"))  { p->trig = f; memcpy(p->trigP, m + 12, 12); }
+        if (!p->bolt && !strcmp(nm, "bolt"))     { p->bolt = f; memcpy(p->boltP, m + 12, 12); }
+    }
+    g_ForChildren(f, CollectCb, p);
 }
-static void* DumpFrame(void* frame, void* data)
+
+static float Smooth(float t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); return t * t * (3 - 2 * t); }
+// 0 -> 1 over 'start' ms, stays for 'hold', back to 0 over 'end'
+static float Profile(float t, float start, float hold, float end)
 {
-    DumpCtx* c = (DumpCtx*)data;
-    DumpTree(frame, c->depth, c->budget);
-    return frame;
+    if (t < 0) return 0;
+    if (t < start) return Smooth(t / start);
+    if (t < start + hold) return 1;
+    if (t < start + hold + end) return 1 - Smooth((t - start - hold) / end);
+    return 0;
+}
+static uint32_t NowMs()
+{
+    timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)(ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull);
+}
+static void SetMat(void* frame, float rx, float rz, float ux, float uy, float uz, float ax, float az, const float* pos, float sx, float sy, float sz)
+{
+    float* m = (float*)((uint8_t*)frame + 0x20);
+    m[0] = rx * sx; m[1] = 0;       m[2] = rz * sx;
+    m[4] = ux * sy; m[5] = uy * sy; m[6] = uz * sy;
+    m[8] = ax * sz; m[9] = 0;       m[10] = az * sz;
+    m[12] = pos[0]; m[13] = pos[1]; m[14] = pos[2];
+    if (g_FrameUpdate) g_FrameUpdate(frame);
+}
+static void SetOffset(void* frame, const float* base, float dx, float dy, float dz, float scale)
+{
+    float p[3] = { base[0] + dx, base[1] + dy, base[2] + dz };
+    SetMat(frame, 1, 0, 0, 1, 0, 0, 1, p, scale, scale, scale);
 }
 
 typedef void (*PedRender_t)(void*);
 static PedRender_t g_PedRenderOrig = nullptr;
+static void Animate(const uint8_t* wp, int state)
+{
+    static int lastState = -1, lastClip = -1;
+    static uint32_t reloadStart = 0, shotTime = 0;
+    static float reloadDur = 0;
+    static bool dirty = false;
+    uint32_t now = NowMs();
+    int clip = *(const int*)(wp + 8);
+    if (lastClip >= 0 && clip < lastClip && state != 2) shotTime = now;
+    lastClip = clip;
+    if (state == 2 && lastState != 2)
+    {
+        reloadStart = now;
+        float d = 0;
+        if (g_TimerMs) d = (float)(int)(*(const uint32_t*)(wp + 0x10) - *g_TimerMs);
+        reloadDur = (d >= 300.f && d <= 8000.f) ? d : g_ReloadMs;
+        LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
+    }
+    lastState = state;
+    bool reloading = state == 2;
+    float p = 0, tRel = 0;
+    if (reloading) { tRel = (float)(now - reloadStart); p = reloadDur > 0 ? tRel / reloadDur : 1.f; if (p > 1) p = 1; }
+    float tShot = shotTime ? (float)(now - shotTime) : 100000.f;
+
+    float trig = Profile(tShot, g_TrigStart, g_TrigHold, g_TrigEnd);
+    float bolt = Profile(tShot, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
+    float dz = 0, scale = 1;
+    if (reloading)
+    {
+        if (p >= g_MagOut1 && p < g_MagOut2) dz = -g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
+        else if (p >= g_MagOut2 && p < g_MagIn1) { dz = -g_MagDrop; scale = 0.001f; }
+        else if (p >= g_MagIn1 && p < g_MagIn2) dz = -g_MagDrop * (1 - Smooth((p - g_MagIn1) / (g_MagIn2 - g_MagIn1)));
+        float rb = Profile(p * reloadDur - g_BoltAt * reloadDur, g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd);
+        if (rb > bolt) bolt = rb;
+    }
+    bool active = reloading || trig > 0 || bolt > 0;
+    if (!active && !dirty) return;
+    dirty = active;
+    if (g_P.mag)  SetOffset(g_P.mag, g_P.magP, 0, 0, dz, scale);
+    if (g_P.bolt) SetOffset(g_P.bolt, g_P.boltP, g_BoltBack * bolt, 0, 0, 1);
+    if (g_P.trig)
+    {
+        float a = g_TrigAngle * trig, c = cosf(a), s = sinf(a);
+        SetMat(g_P.trig, c, -s, 0, 1, 0, s, c, g_P.trigP, 1, 1, 1);
+    }
+}
 static void PedRender_hook(void* ped)
 {
-    static int lastState = -1, dumps = 0;
-    if (g_FindPlayerPed && g_FrameName && g_ForChildren && ped == g_FindPlayerPed(0))
+    if (g_Animate && g_FindPlayerPed && g_FrameName && g_ForChildren && ped == g_FindPlayerPed(0))
     {
         void* clump = *(void**)((uint8_t*)ped + 0x650);          // CPed::m_pWeaponObject (RpClump*)
         int8_t slot = *(int8_t*)((uint8_t*)ped + 0x8dc);
@@ -373,15 +470,18 @@ static void PedRender_hook(void* ped)
         {
             const uint8_t* wp = (const uint8_t*)ped + 0x730 + slot * 32;
             int type = *(const int*)wp, state = *(const int*)(wp + 4);
-            if (type == g_AkType && state != lastState && dumps < 6)
+            if (type == g_AkType)
             {
-                lastState = state; ++dumps;
-                void* root = *(void**)((uint8_t*)clump + 8);       // RwObject::parent = RwFrame*
-                LOGI("== weapon model dump: type=%d state=%d clump=%p frame=%p", type, state, clump, root);
-                int budget = 80;
-                DumpTree(root, 0, &budget);
+                if (g_P.clump != clump)
+                {
+                    g_P = Parts(); g_P.clump = clump;
+                    void* root = *(void**)((uint8_t*)clump + 8);        // RwObject::parent = RwFrame*
+                    CollectFrame(root, &g_P);
+                    LOGI("AK model parts: mag=%p trigger=%p bolt=%p", g_P.mag, g_P.trig, g_P.bolt);
+                }
+                Animate(wp, state);
             }
-            else if (type != g_AkType) lastState = -1;
+            else g_P.clump = nullptr;
         }
     }
     g_PedRenderOrig(ped);
@@ -428,6 +528,9 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_ForChildren   = (FrameForAllChildren_t)ResolveExact("_Z21RwFrameForAllChildrenP7RwFramePFS0_S0_PvES1_");
     g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
     LOGI("FrameName=%p ForChildren=%p FindPlayerPed=%p", (void*)g_FrameName, (void*)g_ForChildren, (void*)g_FindPlayerPed);
+    g_FrameUpdate   = (FrameUpdateObjects_t)ResolveExact("_Z20RwFrameUpdateObjectsP7RwFrame");
+    g_TimerMs       = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
+    LOGI("FrameUpdate=%p Timer=%p", (void*)g_FrameUpdate, (void*)g_TimerMs);
     Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
     Install("_ZN12CAnimManager21CreateAnimAssocGroupsEv", (void*)CreateGroups_hook, &g_CreateGroupsOrig);
     Install("_ZN11CWeaponInfo14LoadWeaponDataEv", (void*)LoadWeaponData_hook, &g_LoadWeaponDataOrig);
