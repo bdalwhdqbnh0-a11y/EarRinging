@@ -112,10 +112,12 @@ static std::string g_AkGroup = "ar15", g_AkGroupPoor = "ar15bad";
 static std::string g_Template = "rifle", g_TemplateBad = "riflebad";   // vanilla groups whose descriptor table we copy
 // settings (SanVive.ini)
 static int   g_Animate = 1;
-static float g_ReloadMs = 2400.f;                      // used only when the real reload time can't be read
+static float g_ReloadMs = 1000.f;                      // used only when the real reload time can't be read
 static float g_MagDrop = 0.30f, g_MagOut1 = 0.16f, g_MagOut2 = 0.22f, g_MagIn1 = 0.50f, g_MagIn2 = 0.88f;
 static int   g_UseFbx = 1;
 static float g_FbxSwap = 52.f, g_FbxScale = 1.f;   // sample where the new magazine replaces the old one
+static int   g_UseHand = 1, g_HandBone = 34;
+static float g_HandGrab = 0.20f, g_HandRelease = 0.40f, g_HandNew = 0.52f, g_HandInsert = 0.72f, g_HandEnd = 0.88f;
 static float g_DropDist = 0.90f, g_FallMs = 700.f;
 static float g_BoltAt = 0.90f, g_BoltBack = -0.074f;
 static float g_TrigAngle = 0.5948f;                    // radians (34 deg), from the pack's trigger/finalpos
@@ -171,6 +173,13 @@ static void LoadConfig()
         else if (!strcmp(k, "MagOut2")) g_MagOut2 = (float)atof(v);
         else if (!strcmp(k, "MagIn1")) g_MagIn1 = (float)atof(v);
         else if (!strcmp(k, "MagIn2")) g_MagIn2 = (float)atof(v);
+        else if (!strcmp(k, "UseHand")) g_UseHand = atoi(v);
+        else if (!strcmp(k, "HandBone")) g_HandBone = atoi(v);
+        else if (!strcmp(k, "HandGrab")) g_HandGrab = (float)atof(v);
+        else if (!strcmp(k, "HandRelease")) g_HandRelease = (float)atof(v);
+        else if (!strcmp(k, "HandNew")) g_HandNew = (float)atof(v);
+        else if (!strcmp(k, "HandInsert")) g_HandInsert = (float)atof(v);
+        else if (!strcmp(k, "HandEnd")) g_HandEnd = (float)atof(v);
         else if (!strcmp(k, "UseFbx")) g_UseFbx = atoi(v);
         else if (!strcmp(k, "FbxSwap")) g_FbxSwap = (float)atof(v);
         else if (!strcmp(k, "FbxScale")) g_FbxScale = (float)atof(v);
@@ -371,6 +380,8 @@ static FindPlayerPed_t g_FindPlayerPed = nullptr;
 static FrameUpdateObjects_t g_FrameUpdate = nullptr;
 typedef float* (*GetLTM_t)(void*);
 static GetLTM_t g_GetLTM = nullptr;
+typedef void (*GetBone_t)(void*, float*, unsigned, bool);
+static GetBone_t g_GetBone = nullptr;
 static uint32_t* g_TimerMs = nullptr;                 // CTimer::m_snTimeInMilliseconds
 
 struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *trig = nullptr, *bolt = nullptr; float magP[3] = {0}, trigP[3] = {0}, boltP[3] = {0}; };
@@ -698,7 +709,19 @@ static void SetMatFull(void* frame, const float* pos, const float* R)   // R = r
 
 typedef void (*PedRender_t)(void*);
 static PedRender_t g_PedRenderOrig = nullptr;
-static void Animate(const uint8_t* wp, int state)
+static int g_HandLogs = 0;
+static bool HandLocal(void* ped, float* out)
+{
+    if (!g_GetBone || !g_GetLTM || !g_P.root) return false;
+    float v[3] = {0, 0, 0};
+    g_GetBone(ped, v, (unsigned)g_HandBone, false);
+    float* P = g_GetLTM(g_P.root);
+    if (!P) return false;
+    float d[3] = { v[0] - P[12], v[1] - P[13], v[2] - P[14] };
+    for (int j = 0; j < 3; ++j) out[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
+    return true;
+}
+static void Animate(void* ped, const uint8_t* wp, int state)
 {
     static int lastState = -1, lastClip = -1;
     static uint32_t reloadStart = 0, shotTime = 0;
@@ -708,16 +731,23 @@ static void Animate(const uint8_t* wp, int state)
     int clip = *(const int*)(wp + 8);
     if (lastClip >= 0 && clip < lastClip && state != 2) shotTime = now;
     lastClip = clip;
-    if (state == 2 && lastState != 2)
+    static bool reloadActive = false; static uint32_t lastIn2 = 0; static float lastGoodDur = 0; static int trans = 0;
+    if (state != lastState && trans < 60) { ++trans; LOGI("state %d -> %d (clip %d)", lastState, state, clip); }
+    if (state == 2) lastIn2 = now;
+    if (state == 2 && !reloadActive)
     {
+        reloadActive = true;
         reloadStart = now;
         float d = 0;
         if (g_TimerMs) d = (float)(int)(*(const uint32_t*)(wp + 0x10) - *g_TimerMs);
-        reloadDur = (d >= 300.f && d <= 8000.f) ? d : g_ReloadMs;
+        if (d >= 300.f && d <= 8000.f) lastGoodDur = d;
+        reloadDur = lastGoodDur > 0 ? lastGoodDur : g_ReloadMs;
+        ++g_HandLogs;
         LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
     }
+    if (reloadActive && state != 2 && now - lastIn2 > 200) reloadActive = false;
     lastState = state;
-    bool reloading = state == 2;
+    bool reloading = reloadActive;
     float p = 0, tRel = 0;
     if (reloading) { tRel = (float)(now - reloadStart); p = reloadDur > 0 ? tRel / reloadDur : 1.f; if (p > 1) p = 1; }
     float tShot = shotTime ? (float)(now - shotTime) : 100000.f;
@@ -728,7 +758,12 @@ static void Animate(const uint8_t* wp, int state)
     bool falling = false;
     bool fbx = reloading && g_UseFbx;
     float kf = p * 120.f;
-    if (reloading && !fbx)
+    float H[3] = {0, 0, 0};
+    bool handMode = reloading && g_UseHand && g_P.mag && HandLocal(ped, H);
+    static float handOff[3]; static bool gotOff = false; static uint32_t lastLog = 0;
+    if (!reloading) gotOff = false;
+    if (handMode && g_HandLogs <= 4 && now - lastLog >= 80) { lastLog = now; LOGI("hand p=%.2f local=(%.3f %.3f %.3f)", p, H[0], H[1], H[2]); }
+    if (reloading && !fbx && !handMode)
     {
         if (p >= g_MagOut1 && p < g_MagOut2) dz = -g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
         else if (p >= g_MagOut2 && p < g_MagIn1) { dz = -g_MagDrop; falling = true; }
@@ -739,7 +774,29 @@ static void Animate(const uint8_t* wp, int state)
     bool active = reloading || trig > 0 || bolt > 0;
     if (!active && !dirty) return;
     dirty = active;
-    if (g_P.mag && fbx)
+    bool fall = false; (void)fall;
+    float fallStart = g_MagOut2;
+    if (g_P.mag && handMode)
+    {
+        float pos[3] = { g_P.magP[0], g_P.magP[1], g_P.magP[2] };
+        bool follow = p >= g_HandGrab && p < g_HandInsert;
+        if (follow && !gotOff) { for (int i = 0; i < 3; ++i) handOff[i] = g_P.magP[i] - H[i]; gotOff = true; }
+        if (follow) for (int i = 0; i < 3; ++i) pos[i] = H[i] + handOff[i];
+        else if (p >= g_HandInsert && p < g_HandEnd && gotOff)
+        {
+            float f = Smooth((p - g_HandInsert) / (g_HandEnd - g_HandInsert));
+            for (int i = 0; i < 3; ++i) pos[i] = (H[i] + handOff[i]) * (1 - f) + g_P.magP[i] * f;
+        }
+        fall = p >= g_HandRelease && p < g_HandNew;
+        fallStart = g_HandRelease;
+        static const float I3[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        SetMatFull(g_P.mag, pos, I3);
+        falling = fall;
+    }
+    if (g_P.mag && handMode)
+    {
+    }
+    else if (g_P.mag && fbx)
     {
         float o[12];
         bool second = kf >= g_FbxSwap;
@@ -750,6 +807,9 @@ static void Animate(const uint8_t* wp, int state)
     else if (g_P.mag)
     {
         SetOffset(g_P.mag, g_P.magP, 0, 0, dz, scale);
+    }
+    if (g_P.mag)
+    {
         static bool captured = false;
         static float W[16];
         if (!falling) captured = false;
@@ -760,7 +820,7 @@ static void Animate(const uint8_t* wp, int state)
             float* P = g_GetLTM(g_P.root);                         // parent (weapon base) world pose
             if (captured && P)
             {
-                float r = (p - g_MagOut2) * reloadDur / (g_FallMs > 1 ? g_FallMs : 1); if (r > 1) r = 1;
+                float r = (p - fallStart) * reloadDur / (g_FallMs > 1 ? g_FallMs : 1); if (r > 1) r = 1;
                 float pw[3] = { W[12], W[13], W[14] - g_DropDist * r * r };   // falls straight down (world z)
                 float m[16] = {0};
                 for (int i = 0; i < 3; ++i)                        // rows right, up, at: local = world * inverse(parent)
@@ -802,7 +862,7 @@ static void PedRender_hook(void* ped)
                     CollectFrame(root, &g_P);
                     LOGI("AK model parts: mag=%p trigger=%p bolt=%p", g_P.mag, g_P.trig, g_P.bolt);
                 }
-                Animate(wp, state);
+                Animate(ped, wp, state);
             }
             else g_P.clump = nullptr;
         }
@@ -852,9 +912,10 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
     LOGI("FrameName=%p ForChildren=%p FindPlayerPed=%p", (void*)g_FrameName, (void*)g_ForChildren, (void*)g_FindPlayerPed);
     g_FrameUpdate   = (FrameUpdateObjects_t)ResolveExact("_Z20RwFrameUpdateObjectsP7RwFrame");
+    g_GetBone       = (GetBone_t)ResolveExact("_ZN4CPed15GetBonePositionER5RwV3djb");
     g_GetLTM        = (GetLTM_t)ResolveExact("_Z13RwFrameGetLTMP7RwFrame");
     g_TimerMs       = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
-    LOGI("FrameUpdate=%p Timer=%p", (void*)g_FrameUpdate, (void*)g_TimerMs);
+    LOGI("FrameUpdate=%p Timer=%p GetLTM=%p GetBone=%p", (void*)g_FrameUpdate, (void*)g_TimerMs, (void*)g_GetLTM, (void*)g_GetBone);
     Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
     Install("_ZN12CAnimManager21CreateAnimAssocGroupsEv", (void*)CreateGroups_hook, &g_CreateGroupsOrig);
     Install("_ZN11CWeaponInfo14LoadWeaponDataEv", (void*)LoadWeaponData_hook, &g_LoadWeaponDataOrig);
