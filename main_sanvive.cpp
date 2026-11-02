@@ -118,7 +118,7 @@ static int   g_UseFbx = 1;
 static float g_FbxSwap = 52.f, g_FbxScale = 1.f;   // sample where the new magazine replaces the old one
 static int   g_ExtendReload = 1;
 static float g_ReloadSpeed = 0.45f;               // playback speed of the reload animation (1 = normal)
-static int   g_FreezeAnim = 1;                    // freeze CJ's own reload animation (FBX hands replace it)
+static int   g_FreezeAnim = 1;                    // CJ's own reload animation: 0 normal, 1 frozen at FreezeTime, 2 blended out
 static float g_FreezeTime = 0.0f;                 // time (s) inside the old reload anim to hold
 static int   g_Hands = 1;                         // FBX hands: 0 off, 1 during reload
 static int   g_UseHand = 1, g_HandBone = 34;
@@ -1065,7 +1065,9 @@ static void Animate(void* ped, const uint8_t* wp, int state)
             if (!a) continue;
             float* sp = (float*)(a + 0x3C);
             if (speedLogs < 6) { ++speedLogs; LOGI("reload anim id %u: time=%.3f speed=%.3f", id, *(float*)(a + 0x38), *sp); }
-            if (g_FreezeAnim) { *sp = 0.f; *(float*)(a + 0x38) = g_FreezeTime; }
+            if (speedLogs < 12) LOGI("reload anim id %u: blend=%.3f delta=%.3f", id, *(float*)(a + 0x30), *(float*)(a + 0x34));
+            if (g_FreezeAnim == 2) { *sp = 0.f; *(float*)(a + 0x30) = 0.f; *(float*)(a + 0x34) = 0.f; }   // hide the reload animation completely (blend 0): CJ keeps the pose of the other animations
+            else if (g_FreezeAnim) { *sp = 0.f; *(float*)(a + 0x38) = g_FreezeTime; }
             else if (*sp > 0.05f && *sp < 5.f) *sp = g_ReloadSpeed;
         }
     }
