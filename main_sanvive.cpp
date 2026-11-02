@@ -118,6 +118,8 @@ static int   g_UseFbx = 1;
 static float g_FbxSwap = 52.f, g_FbxScale = 1.f;   // sample where the new magazine replaces the old one
 static int   g_ExtendReload = 1;
 static float g_ReloadSpeed = 0.45f;               // playback speed of the reload animation (1 = normal)
+static int   g_FreezeAnim = 1;                    // freeze CJ's own reload animation (FBX hands replace it)
+static float g_FreezeTime = 0.0f;                 // time (s) inside the old reload anim to hold
 static int   g_Hands = 1;                         // FBX hands: 0 off, 1 during reload
 static int   g_UseHand = 1, g_HandBone = 34;
 static float g_HandGrab = 0.12f, g_HandRelease = 0.40f, g_HandNew = 0.68f, g_HandInsert = 0.86f, g_HandEnd = 0.93f;
@@ -188,6 +190,8 @@ static void LoadConfig()
         else if (!strcmp(k, "ExtendReload")) g_ExtendReload = atoi(v);
         else if (!strcmp(k, "ReloadSpeed")) { g_ReloadSpeed = (float)atof(v); if (g_ReloadSpeed < 0.1f) g_ReloadSpeed = 0.1f; if (g_ReloadSpeed > 2.f) g_ReloadSpeed = 2.f; }
         else if (!strcmp(k, "Hands")) g_Hands = atoi(v);
+        else if (!strcmp(k, "FreezeAnim")) g_FreezeAnim = atoi(v);
+        else if (!strcmp(k, "FreezeTime")) g_FreezeTime = (float)atof(v);
         else if (!strcmp(k, "UseHand")) g_UseHand = atoi(v);
         else if (!strcmp(k, "HandBone")) g_HandBone = atoi(v);
         else if (!strcmp(k, "HandGrab")) g_HandGrab = (float)atof(v);
@@ -1051,7 +1055,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     if (reloadActive && state != 2 && now - lastIn2 > 200) reloadActive = false;
     lastState = state;
     bool reloading = reloadActive;
-    if (reloading && g_ReloadSpeed != 1.f && g_GetAssocId)
+    if (reloading && (g_ReloadSpeed != 1.f || g_FreezeAnim) && g_GetAssocId)
     {
         void* pc = *(void**)((uint8_t*)ped + 0x20);
         static int speedLogs = 0;
@@ -1061,7 +1065,8 @@ static void Animate(void* ped, const uint8_t* wp, int state)
             if (!a) continue;
             float* sp = (float*)(a + 0x3C);
             if (speedLogs < 6) { ++speedLogs; LOGI("reload anim id %u: time=%.3f speed=%.3f", id, *(float*)(a + 0x38), *sp); }
-            if (*sp > 0.05f && *sp < 5.f) *sp = g_ReloadSpeed;
+            if (g_FreezeAnim) { *sp = 0.f; *(float*)(a + 0x38) = g_FreezeTime; }
+            else if (*sp > 0.05f && *sp < 5.f) *sp = g_ReloadSpeed;
         }
     }
     float p = 0, tRel = 0;
