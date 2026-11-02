@@ -1065,7 +1065,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
             if (!a) continue;
             float* sp = (float*)(a + 0x3C);
             if (speedLogs < 6) { ++speedLogs; LOGI("reload anim id %u: time=%.3f speed=%.3f", id, *(float*)(a + 0x38), *sp); }
-            if (speedLogs < 12) LOGI("reload anim id %u: blend=%.3f delta=%.3f", id, *(float*)(a + 0x30), *(float*)(a + 0x34));
+            static int blendLogs = 0; if (blendLogs < 10) { ++blendLogs; LOGI("reload anim id %u: blend=%.3f delta=%.3f", id, *(float*)(a + 0x30), *(float*)(a + 0x34)); }
             if (g_FreezeAnim == 2) { *sp = 0.f; *(float*)(a + 0x30) = 0.f; *(float*)(a + 0x34) = 0.f; }   // hide the reload animation completely (blend 0): CJ keeps the pose of the other animations
             else if (g_FreezeAnim) { *sp = 0.f; *(float*)(a + 0x38) = g_FreezeTime; }
             else if (*sp > 0.05f && *sp < 5.f) *sp = g_ReloadSpeed;
