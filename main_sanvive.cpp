@@ -120,6 +120,7 @@ static int   g_ExtendReload = 1;
 static float g_ReloadSpeed = 0.45f;               // playback speed of the reload animation (1 = normal)
 static int   g_FreezeAnim = 1;                    // CJ's own reload animation: 0 normal, 1 frozen at FreezeTime, 2 blended out
 static float g_FreezeTime = 0.0f;                 // time (s) inside the old reload anim to hold
+static int   g_HideCj = 1;                        // hide CJ's own arms while the FBX hands are shown
 static int   g_Hands = 1;                         // FBX hands: 0 off, 1 during reload
 static int   g_UseHand = 1, g_HandBone = 34;
 static float g_HandGrab = 0.12f, g_HandRelease = 0.40f, g_HandNew = 0.68f, g_HandInsert = 0.86f, g_HandEnd = 0.93f;
@@ -190,6 +191,7 @@ static void LoadConfig()
         else if (!strcmp(k, "ExtendReload")) g_ExtendReload = atoi(v);
         else if (!strcmp(k, "ReloadSpeed")) { g_ReloadSpeed = (float)atof(v); if (g_ReloadSpeed < 0.1f) g_ReloadSpeed = 0.1f; if (g_ReloadSpeed > 2.f) g_ReloadSpeed = 2.f; }
         else if (!strcmp(k, "Hands")) g_Hands = atoi(v);
+        else if (!strcmp(k, "HideCj")) g_HideCj = atoi(v);
         else if (!strcmp(k, "FreezeAnim")) g_FreezeAnim = atoi(v);
         else if (!strcmp(k, "FreezeTime")) g_FreezeTime = (float)atof(v);
         else if (!strcmp(k, "UseHand")) g_UseHand = atoi(v);
@@ -733,6 +735,49 @@ static void SetMatFull(void* frame, const float* pos, const float* R)   // R = r
 typedef void (*PedRender_t)(void*);
 static PedRender_t g_PedRenderOrig = nullptr;
 static int g_HandLogs = 0;
+static bool g_HideArms = false;
+typedef void* (*GetHier_t)(void*); typedef float* (*GetMats_t)(void*); typedef int (*IdIdx_t)(void*, int);
+static GetHier_t g_GetHier = nullptr; static GetMats_t g_GetMats = nullptr; static IdIdx_t g_IdIdx = nullptr;
+typedef void (*EntRender_t)(void*);
+static EntRender_t g_EntRenderOrig = nullptr;
+// CEntity::Render draws the skinned ped. While the FBX hands are shown we collapse CJ's own arm bones (upper arm .. fingers) to their shoulder joint
+// for that call only, then restore them (the weapon is attached to the right-hand bone afterwards, so the real matrices must survive).
+static void EntRender_hook(void* e)
+{
+    bool hid = false; float* M = nullptr; float saved[10][16]; int idx[10]; int n = 0;
+    if (g_HideArms && g_FindPlayerPed && g_GetHier && g_GetMats && g_IdIdx && e == g_FindPlayerPed(0))
+    {
+        void* clump = *(void**)((uint8_t*)e + 0x20);
+        void* h = clump ? g_GetHier(clump) : nullptr;
+        M = h ? g_GetMats(h) : nullptr;
+        if (M)
+        {
+            static const int ids[10] = { 22, 23, 24, 25, 26, 32, 33, 34, 35, 36 };
+            for (int k = 0; k < 10; ++k) idx[k] = g_IdIdx(h, ids[k]);
+            for (int k = 0; k < 10; ++k)
+            {
+                if (idx[k] < 0 || idx[k] > 80) continue;
+                memcpy(saved[k], M + idx[k] * 16, 64);
+            }
+            for (int k = 0; k < 10; ++k)
+            {
+                if (idx[k] < 0 || idx[k] > 80) continue;
+                int root = idx[k < 5 ? 0 : 5];
+                const float* src = (root >= 0 && root <= 80) ? saved[k < 5 ? 0 : 5] : saved[k];
+                float* d = M + idx[k] * 16;
+                for (int i = 0; i < 16; ++i) d[i] = 0.f;
+                d[0] = d[5] = d[10] = 0.0001f; d[15] = 1.f;
+                d[12] = src[12]; d[13] = src[13]; d[14] = src[14];
+            }
+            hid = true; n = 10;
+            static int hl = 0; if (hl < 3) { ++hl; LOGI("hide CJ arms: hier=%p mats=%p idx %d %d %d %d %d | %d %d %d %d %d", h, (void*)M, idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7], idx[8], idx[9]); }
+        }
+    }
+    g_EntRenderOrig(e);
+    if (hid)
+        for (int k = 0; k < n; ++k)
+            if (idx[k] >= 0 && idx[k] <= 80) memcpy(M + idx[k] * 16, saved[k], 64);
+}
 // ---- FBX hand tracks: pos(3) + right/up/at axes (9), weapon space, metres; one row per FBX frame (30 fps, 121 rows)
 static const float kHandR[121][12] = {
 {-0.0133,-0.0316,-0.0075,0.9365,0.3282,-0.1238,0.0072,0.3347,0.9423,0.3506,-0.8833,0.3111},
@@ -1172,6 +1217,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         }
     }
     if (g_Hands) ApplyHands(reloading && p < 0.99f, kf);
+    g_HideArms = g_HideCj && g_Hands && reloading && p < 0.99f;
     if (g_P.bolt) SetOffset(g_P.bolt, g_P.boltP, g_BoltBack * bolt, 0, 0, 1);
     if (g_P.trig)
     {
@@ -1181,6 +1227,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
 }
 static void PedRender_hook(void* ped)
 {
+    g_HideArms = false;
     if (g_Animate && g_FindPlayerPed && g_FrameName && g_ForChildren && ped == g_FindPlayerPed(0))
     {
         void* clump = *(void**)((uint8_t*)ped + 0x650);          // CPed::m_pWeaponObject (RpClump*)
@@ -1254,7 +1301,12 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_GetLTM        = (GetLTM_t)ResolveExact("_Z13RwFrameGetLTMP7RwFrame");
     g_TimerMs       = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
     LOGI("FrameUpdate=%p Timer=%p GetLTM=%p GetBone=%p", (void*)g_FrameUpdate, (void*)g_TimerMs, (void*)g_GetLTM, (void*)g_GetBone);
+    g_GetHier = (GetHier_t)ResolveExact("_Z29GetAnimHierarchyFromSkinClumpP7RpClump");
+    g_GetMats = (GetMats_t)ResolveExact("_Z30RpHAnimHierarchyGetMatrixArrayP16RpHAnimHierarchy");
+    g_IdIdx   = (IdIdx_t)ResolveExact("_Z17RpHAnimIDGetIndexP16RpHAnimHierarchyi");
+    LOGI("Hier=%p Mats=%p IdIdx=%p", (void*)g_GetHier, (void*)g_GetMats, (void*)g_IdIdx);
     Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
+    Install("_ZN7CEntity6RenderEv", (void*)EntRender_hook, &g_EntRenderOrig);
     Install("_ZN12CAnimManager21CreateAnimAssocGroupsEv", (void*)CreateGroups_hook, &g_CreateGroupsOrig);
     Install("_ZN11CWeaponInfo14LoadWeaponDataEv", (void*)LoadWeaponData_hook, &g_LoadWeaponDataOrig);
 }
