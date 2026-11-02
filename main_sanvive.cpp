@@ -1082,7 +1082,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     bool fbx = reloading && g_UseFbx;
     float kf = p * 120.f;
     float H[3] = {0, 0, 0};
-    bool handMode = reloading && g_UseHand && g_P.mag && HandLocal(ped, H);
+    bool handMode = reloading && g_UseHand && !g_FreezeAnim && g_P.mag && HandLocal(ped, H);   // hand-driven stages need CJ's own (unfrozen) animation
     static uint32_t lastLog = 0;
     static int hStage = 0; static float hMaxY = 0, hInsFrom[3]; static uint32_t hFallT0 = 0, hInsT0 = 0;
     static bool wasReloading = false;
