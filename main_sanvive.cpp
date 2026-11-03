@@ -1486,7 +1486,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     LOGI("Hier=%p Mats=%p IdIdx=%p", (void*)g_GetHier, (void*)g_GetMats, (void*)g_IdIdx);
     Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
     Install("_ZN7CEntity6RenderEv", (void*)EntRender_hook, &g_EntRenderOrig);
-    g_SceneSym = ResolveExact("Scene");
+    g_SceneSym = (void*)ResolveExact("Scene");
     LOGI("Scene=%p", g_SceneSym);
     Install("_Z13RpClumpRenderP7RpClump", (void*)ClumpRender_hook, &g_ClumpRenderOrig);
     Install("_ZN12CAnimManager21CreateAnimAssocGroupsEv", (void*)CreateGroups_hook, &g_CreateGroupsOrig);
