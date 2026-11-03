@@ -118,12 +118,12 @@ static int   g_UseFbx = 1;
 static float g_FbxSwap = 52.f, g_FbxScale = 1.f;   // sample where the new magazine replaces the old one
 static int   g_ExtendReload = 1;
 static float g_ReloadSpeed = 0.45f;               // playback speed of the reload animation (1 = normal)
-static int   g_FreezeAnim = 1;                    // CJ's own reload animation: 0 normal, 1 frozen at FreezeTime, 2 blended out
+static int   g_FreezeAnim = 0;                    // CJ's own reload animation: 0 normal, 1 frozen at FreezeTime, 2 blended out
 static float g_FreezeTime = 0.0f;                 // time (s) inside the old reload anim to hold
-static int   g_Viewmodel = 1;                     // COD-style: weapon + hands attached to the camera during reload
+static int   g_Viewmodel = 0;                     // COD-style: weapon + hands attached to the camera during reload
 static float g_ViewR = 0.16f, g_ViewU = -0.17f, g_ViewF = 0.34f, g_ViewYaw = -0.06f, g_ViewPitch = 0.f, g_ViewMove = 1.f;
-static int   g_HideCj = 1;                        // hide CJ's own arms while the FBX hands are shown
-static int   g_Hands = 1;                         // FBX hands: 0 off, 1 during reload
+static int   g_HideCj = 0;                        // hide CJ's own arms while the FBX hands are shown
+static int   g_Hands = 0;                         // FBX hands: 0 off, 1 during reload
 static int   g_UseHand = 1, g_HandBone = 34;
 static float g_HandGrab = 0.12f, g_HandRelease = 0.40f, g_HandNew = 0.68f, g_HandInsert = 0.86f, g_HandEnd = 0.93f;
 static float g_BeltY1 = 0.25f, g_BeltY2 = 0.40f, g_BeltY3 = 0.42f, g_InsertMs = 100.f;
