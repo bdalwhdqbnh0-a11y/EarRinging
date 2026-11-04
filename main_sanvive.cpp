@@ -119,7 +119,7 @@ static int   g_ExtendReload = 1;                     // keep the reload state al
 static float g_MagOut1 = 0.12f, g_MagOut2 = 0.26f;   // magazine slides out of the gun (progress 0..1)
 static float g_MagIn1 = 0.50f, g_MagIn2 = 0.90f;     // new magazine slides in
 static float g_MagDrop = 0.30f;                      // how far the magazine slides down before it is released
-static float g_Gravity = 9.8f, g_Bounce = 0.25f;     // fall (m/s^2) and bounce factor on the ground
+static float g_Gravity = 9.8f, g_Bounce = 0.08f;     // fall (m/s^2) and bounce factor on the ground
 static float g_GroundOff = 0.035f;                    // height of the magazine origin above the ground when it lies there (m)
 static float g_Tilt = 1.4f;
 static float g_LandMs = 300.f;
@@ -522,13 +522,18 @@ static void Animate(void* ped, const uint8_t* wp, int state)
             }
             if (p >= g_MagOut1 && p < g_MagOut2 && haveHand)       // the left hand grabs the magazine and pulls it out
             {
-                float t = Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
-                for (int j = 0; j < 3; ++j) pos[j] = g_P.magP[j] + (hl[j] - g_P.magP[j]) * t;
+                float t = (p - g_MagOut1) / (g_MagOut2 - g_MagOut1);          // first straight out of the magazine well, then to the hand
+                float below[3] = { g_P.magP[0], g_P.magP[1], g_P.magP[2] - g_MagDrop };
+                if (t < 0.5f) { float u2 = Smooth(t * 2); for (int j = 0; j < 3; ++j) pos[j] = g_P.magP[j] + (below[j] - g_P.magP[j]) * u2; }
+                else { float u2 = Smooth((t - 0.5f) * 2); for (int j = 0; j < 3; ++j) pos[j] = below[j] + (hl[j] - below[j]) * u2; }
             }
             else if (p >= g_MagIn1 && p < g_MagIn2 && haveHand)    // new magazine appears in the hand, then goes into the weapon
             {
-                float t = Smooth(((p - g_MagIn1) / (g_MagIn2 - g_MagIn1) - 0.4f) / 0.6f);
-                for (int j = 0; j < 3; ++j) pos[j] = hl[j] + (g_P.magP[j] - hl[j]) * t;
+                float s2 = (p - g_MagIn1) / (g_MagIn2 - g_MagIn1);             // in the hand, then below the well, then straight up into it
+                float below[3] = { g_P.magP[0], g_P.magP[1], g_P.magP[2] - g_MagDrop };
+                if (s2 < 0.15f) { for (int j = 0; j < 3; ++j) pos[j] = hl[j]; }
+                else if (s2 < 0.6f) { float u2 = Smooth((s2 - 0.15f) / 0.45f); for (int j = 0; j < 3; ++j) pos[j] = hl[j] + (below[j] - hl[j]) * u2; }
+                else { float u2 = Smooth((s2 - 0.6f) / 0.4f); for (int j = 0; j < 3; ++j) pos[j] = below[j] + (g_P.magP[j] - below[j]) * u2; }
             }
             else if (p >= g_MagOut1 && p < g_MagOut2) pos[2] -= g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
             else if (p >= g_MagOut2 && p < g_MagIn1) { if (!g_GetBonePos) pos[2] -= g_MagDrop; fallingNow = true; hideMag = g_P.drop != nullptr; }
@@ -569,7 +574,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                 {
                     zNow = floorZ;
                     if (!landed) { landed = true; landT = now; }
-                    vz = (vz < -0.8f) ? -vz * g_Bounce : 0.f;
+                    vz = (vz < -1.5f) ? -vz * g_Bounce : 0.f;
                 }
                 // orientation: spins while in the air, then settles flat (side face down, long axis horizontal)
                 float tAir = (float)((landed ? landT : now) - fallT0) * 0.001f;
@@ -600,6 +605,15 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                 float d[3] = { W[12] + hx * xyOff - P[12], W[13] + hy * xyOff - P[13], zNow - P[14] };
                 for (int j = 0; j < 3; ++j) lp[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
                 SetFrame(tgt, R, lp);
+                if (landed && g_GetLTM)
+                {
+                    static uint32_t lastLog = 0; static int nLog = 0;
+                    if (now - lastLog > 300 && nLog < 40)
+                    {
+                        lastLog = now; ++nLog; float* L = g_GetLTM(tgt);
+                        if (L) LOGI("rest: want %.3f %.3f %.3f got %.3f %.3f %.3f", W[12] + hx * xyOff, W[13] + hy * xyOff, zNow, L[12], L[13], L[14]);
+                    }
+                }
             }
         }
         if (hideMag) { const float hs[9] = { 1e-4f, 0, 0, 0, 1e-4f, 0, 0, 0, 1e-4f }; SetFrame(g_P.mag, hs, pos); }
