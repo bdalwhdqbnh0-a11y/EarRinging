@@ -114,15 +114,16 @@ static int  g_AkType = 30;
 // settings (SanVive.ini)
 static int   g_Animate = 1;
 static float g_ReloadMs = 1000.f;                    // used only when the real reload time can't be read
-static float g_ReloadSpeed = 0.75f;                  // reload animation speed (1 = normal, lower = slower)
+static float g_ReloadSpeed = 0.6f;                  // reload animation speed (1 = normal, lower = slower)
 static int   g_ExtendReload = 1;                     // keep the reload state alive for the slowed animation
-static float g_MagOut1 = 0.16f, g_MagOut2 = 0.22f;   // magazine slides out of the gun (progress 0..1)
-static float g_MagIn1 = 0.55f, g_MagIn2 = 0.88f;     // new magazine slides in
+static float g_MagOut1 = 0.12f, g_MagOut2 = 0.26f;   // magazine slides out of the gun (progress 0..1)
+static float g_MagIn1 = 0.50f, g_MagIn2 = 0.90f;     // new magazine slides in
 static float g_MagDrop = 0.30f;                      // how far the magazine slides down before it is released
 static float g_Gravity = 9.8f, g_Bounce = 0.25f;     // fall (m/s^2) and bounce factor on the ground
 static float g_GroundOff = 0.035f;                    // height of the magazine origin above the ground when it lies there (m)
 static float g_Tilt = 1.4f;
-static float g_LandMs = 450.f;
+static float g_LandMs = 300.f;
+static float g_Spin = 7.0f, g_Drift = 0.35f, g_StayMs = 60000.f;
 static float g_HandOff[3] = { 0, 0, 0 };            // magazine position inside the left hand (hand-local axes)                          // radians the magazine tumbles until it lies on the ground
 static float g_BoltBack = -0.074f, g_BoltAt = 0.90f; // bolt travel (m) and reload progress at which it is racked
 static float g_FireBoltStart = 50, g_FireBoltHold = 25, g_FireBoltEnd = 50;
@@ -182,6 +183,9 @@ static void LoadConfig()
         else if (!strcmp(k, "Bounce")) g_Bounce = (float)atof(v);
         else if (!strcmp(k, "GroundOffset")) g_GroundOff = (float)atof(v);
         else if (!strcmp(k, "MagTilt")) g_Tilt = (float)atof(v);
+        else if (!strcmp(k, "Spin")) g_Spin = (float)atof(v);
+        else if (!strcmp(k, "Drift")) g_Drift = (float)atof(v);
+        else if (!strcmp(k, "StayMs")) g_StayMs = (float)atof(v);
         else if (!strcmp(k, "HandX")) g_HandOff[0] = (float)atof(v);
         else if (!strcmp(k, "HandY")) g_HandOff[1] = (float)atof(v);
         else if (!strcmp(k, "HandZ")) g_HandOff[2] = (float)atof(v);
@@ -451,7 +455,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     static bool reloadActive = false, racked = false, dirty = false;
     static float reloadDur = 3000.f, lastGoodDur = 0.f;
     static uint32_t gStart = 0;
-    static uint32_t lingerUntil = 0; static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
+    static uint32_t lingerUntil = 0, landT = 0; static bool landed = false; static float xyOff = 0; static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
     uint32_t now = g_TimerMs ? *g_TimerMs : 0;
     int clip = *(const int*)(wp + 8);
     if (lastClip >= 0 && clip < lastClip && state != 2) shotTime = now;           // a bullet was fired
@@ -474,7 +478,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (*tf < want && *tf + 20000 > want) *tf = want;
     }
     if (state != 2) gStart = 0;
-    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; lingerUntil = now + 2500; }
+    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; lingerUntil = now + (uint32_t)g_StayMs; }
     bool reloading = reloadActive;
     if (reloading && g_ReloadSpeed != 1.f && g_GetAssocId)                          // slow the reload animation down
     {
@@ -541,7 +545,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
             {
                 if (!released)
                 {
-                    released = true; memcpy(W, ltm, sizeof(W)); fallT0 = now; lastT = now; vz = 0; zNow = W[14];
+                    released = true; landed = false; xyOff = 0; memcpy(W, ltm, sizeof(W)); fallT0 = now; lastT = now; vz = 0; zNow = W[14];
                     float gz = g_FindGroundZ ? g_FindGroundZ(W[12], W[13]) : -1000.f;
                     void* pf = *(void**)((uint8_t*)*(void**)((uint8_t*)ped + 0x20) + 8);
                     float* pl = pf ? g_GetLTM(pf) : nullptr;      // ped world position (origin ~1 m above the ground)
@@ -550,18 +554,41 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                     LOGI("magazine released at z=%.2f ground z=%.2f", W[14], gz);
                 }
                 float dt = (float)(now - lastT) * 0.001f; if (dt > 0.05f) dt = 0.05f; lastT = now;
-                vz -= g_Gravity * dt; zNow += vz * dt;
+                float hx = W[0], hy = W[1], hl2 = sqrtf(hx * hx + hy * hy);
+                if (hl2 < 0.2f) { hx = W[8]; hy = W[9]; hl2 = sqrtf(hx * hx + hy * hy); }
+                if (hl2 < 1e-4f) { hx = 1; hy = 0; hl2 = 1; }
+                hx /= hl2; hy /= hl2;
+                if (!landed)
+                {
+                    vz -= g_Gravity * dt; zNow += vz * dt;
+                    xyOff += g_Drift * dt;
+                }
+                else { vz -= g_Gravity * dt; zNow += vz * dt; }
                 float floorZ = groundZ + g_GroundOff;
-                if (zNow <= floorZ) { zNow = floorZ; vz = (vz < -1.0f) ? -vz * g_Bounce : 0.f; }
-                // target resting pose: side face down (local y = world up), long axis horizontal
-                float hx = W[0], hy = W[1], hl = sqrtf(hx * hx + hy * hy);
-                if (hl < 0.2f) { hx = W[8]; hy = W[9]; hl = sqrtf(hx * hx + hy * hy); }
-                if (hl < 1e-4f) { hx = 1; hy = 0; hl = 1; }
-                hx /= hl; hy /= hl;
-                float T[9] = { hx, hy, 0,  0, 0, 1,  hy, -hx, 0 };      // x = heading, y = up, z = x cross y
-                float u = Smooth((float)(now - fallT0) / g_LandMs);
+                if (zNow <= floorZ)
+                {
+                    zNow = floorZ;
+                    if (!landed) { landed = true; landT = now; }
+                    vz = (vz < -0.8f) ? -vz * g_Bounce : 0.f;
+                }
+                // orientation: spins while in the air, then settles flat (side face down, long axis horizontal)
+                float tAir = (float)((landed ? landT : now) - fallT0) * 0.001f;
+                float th = g_Spin * tAir, c = cosf(th), sn = sinf(th);
+                float ax = hy, ay = -hx;                                   // horizontal axis perpendicular to the heading
+                float S[9];
+                for (int k = 0; k < 3; ++k)
+                {
+                    const float* v = W + (k == 1 ? 4 : (k == 2 ? 8 : 0));
+                    float dotv = ax * v[0] + ay * v[1];
+                    float cx = ay * v[2], cy = -ax * v[2], cz = ax * v[1] - ay * v[0];      // a x v
+                    S[k * 3] = v[0] * c + cx * sn + ax * dotv * (1 - c);
+                    S[k * 3 + 1] = v[1] * c + cy * sn + ay * dotv * (1 - c);
+                    S[k * 3 + 2] = v[2] * c + cz * sn;
+                }
+                float T[9] = { hx, hy, 0,  0, 0, 1,  hy, -hx, 0 };
+                float u = landed ? Smooth((float)(now - landT) / g_LandMs) : 0.f;
                 float A[9];
-                for (int i = 0; i < 3; ++i) { A[i] = W[i] * (1 - u) + T[i] * u; A[3 + i] = W[4 + i] * (1 - u) + T[3 + i] * u; }
+                for (int i = 0; i < 3; ++i) { A[i] = S[i] * (1 - u) + T[i] * u; A[3 + i] = S[3 + i] * (1 - u) + T[3 + i] * u; }
                 float l1 = sqrtf(A[3] * A[3] + A[4] * A[4] + A[5] * A[5]); for (int i = 3; i < 6; ++i) A[i] /= l1;
                 float dp = A[0] * A[3] + A[1] * A[4] + A[2] * A[5];
                 for (int i = 0; i < 3; ++i) A[i] -= dp * A[3 + i];
@@ -570,7 +597,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                 float wr[9]; memcpy(wr, A, sizeof(wr));
                 float R[9], lp[3];
                 for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) R[i * 3 + j] = wr[i * 3] * P[j * 4] + wr[i * 3 + 1] * P[j * 4 + 1] + wr[i * 3 + 2] * P[j * 4 + 2];
-                float d[3] = { W[12] - P[12], W[13] - P[13], zNow - P[14] };
+                float d[3] = { W[12] + hx * xyOff - P[12], W[13] + hy * xyOff - P[13], zNow - P[14] };
                 for (int j = 0; j < 3; ++j) lp[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
                 SetFrame(tgt, R, lp);
             }
