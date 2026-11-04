@@ -393,6 +393,8 @@ static FrameForAllChildren_t g_ForChildren = nullptr;
 static FindPlayerPed_t g_FindPlayerPed = nullptr;
 static FrameUpdateObjects_t g_FrameUpdate = nullptr;
 static GetLTM_t g_GetLTM = nullptr;
+typedef void* (*GetBonePos_t)(void* ped, float* out, unsigned bone, bool);
+static GetBonePos_t g_GetBonePos = nullptr;
 static GetAssocId_t g_GetAssocId = nullptr;
 static FindGroundZ_t g_FindGroundZ = nullptr;
 static uint32_t* g_TimerMs = nullptr;
@@ -502,15 +504,15 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (reloading)
         {
             float hl[3]; bool haveHand = false;
-            if (g_P.lhand && g_GetLTM && g_P.root)
+            if (g_GetBonePos && g_GetLTM && g_P.root)
             {
-                float* H = g_GetLTM(g_P.lhand); float* P = g_GetLTM(g_P.root);
-                if (H && P)
+                float* P = g_GetLTM(g_P.root);
+                float hw[3] = { 0, 0, 0 };
+                g_GetBonePos(ped, hw, 34, false);                  // bone 34 = left hand (world position)
+                if (P && (hw[0] != 0 || hw[1] != 0 || hw[2] != 0))
                 {
-                    float hw[3];
-                    for (int j = 0; j < 3; ++j) hw[j] = H[12 + j] + g_HandOff[0] * H[j] + g_HandOff[1] * H[4 + j] + g_HandOff[2] * H[8 + j];
                     float d[3] = { hw[0] - P[12], hw[1] - P[13], hw[2] - P[14] };
-                    for (int j = 0; j < 3; ++j) hl[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
+                    for (int j = 0; j < 3; ++j) hl[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2] + g_HandOff[j];
                     haveHand = true;
                 }
             }
@@ -525,7 +527,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                 for (int j = 0; j < 3; ++j) pos[j] = hl[j] + (g_P.magP[j] - hl[j]) * t;
             }
             else if (p >= g_MagOut1 && p < g_MagOut2) pos[2] -= g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
-            else if (p >= g_MagOut2 && p < g_MagIn1) { if (!g_P.lhand) pos[2] -= g_MagDrop; fallingNow = true; hideMag = g_P.drop != nullptr; }
+            else if (p >= g_MagOut2 && p < g_MagIn1) { if (!g_GetBonePos) pos[2] -= g_MagDrop; fallingNow = true; hideMag = g_P.drop != nullptr; }
             else if (p >= g_MagIn1 && p < g_MagIn2 && !haveHand) pos[2] -= g_MagDrop * (1 - Smooth((p - g_MagIn1) / (g_MagIn2 - g_MagIn1)));
         }
         void* tgt = g_P.drop ? g_P.drop : g_P.mag;
@@ -646,6 +648,8 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_FrameName     = (GetFrameNodeName_t)ResolveExact("_Z16GetFrameNodeNameP7RwFrame");
     g_ForChildren   = (FrameForAllChildren_t)ResolveExact("_Z21RwFrameForAllChildrenP7RwFramePFS0_S0_PvES1_");
     g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
+    g_GetBonePos    = (GetBonePos_t)ResolveExact("_ZN4CPed15GetBonePositionER5RwV3djb");
+    LOGI("GetBonePosition=%p", (void*)g_GetBonePos);
     g_FrameUpdate   = (FrameUpdateObjects_t)ResolveExact("_Z20RwFrameUpdateObjectsP7RwFrame");
     g_GetAssocId    = (GetAssocId_t)ResolveExact("_Z30RpAnimBlendClumpGetAssociationP7RpClumpj");
     g_GetLTM        = (GetLTM_t)ResolveExact("_Z13RwFrameGetLTMP7RwFrame");
