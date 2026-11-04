@@ -120,7 +120,7 @@ static float g_MagOut1 = 0.12f, g_MagOut2 = 0.26f;   // magazine slides out of t
 static float g_MagIn1 = 0.50f, g_MagIn2 = 0.90f;     // new magazine slides in
 static float g_MagDrop = 0.30f;                      // how far the magazine slides down before it is released
 static float g_Gravity = 9.8f, g_Bounce = 0.08f;     // fall (m/s^2) and bounce factor on the ground
-static float g_GroundOff = 0.035f;                    // height of the magazine origin above the ground when it lies there (m)
+static float g_GroundOff = 0.02f;                    // height of the magazine origin above the ground when it lies there (m)
 static float g_Tilt = 1.4f;
 static float g_LandMs = 300.f;
 static float g_Spin = 7.0f, g_Drift = 0.35f, g_StayMs = 60000.f;
@@ -406,6 +406,7 @@ static PedRender_t g_PedRenderOrig = nullptr;
 
 struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr, *lhand = nullptr; float magP[3] = {0}, boltP[3] = {0}; };
 static Parts g_P;
+static float g_DropR[9], g_DropPos[3]; static bool g_DropValid = false;
 static void CollectFrame(void* f, Parts* p);
 static void* CollectCb(void* f, void* d) { CollectFrame(f, (Parts*)d); return f; }
 static void CollectFrame(void* f, Parts* p)
@@ -541,7 +542,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         }
         void* tgt = g_P.drop ? g_P.drop : g_P.mag;
         bool simulate = g_P.drop ? ((reloading && p >= g_MagOut2) || linger) : fallingNow;
-        if (g_P.drop && !simulate) { const float hs[9] = { 1e-4f, 0, 0, 0, 1e-4f, 0, 0, 0, 1e-4f }; SetFrame(g_P.drop, hs, g_P.magP); }
+        if (g_P.drop && !simulate) { g_DropValid = false; const float hs[9] = { 1e-4f, 0, 0, 0, 1e-4f, 0, 0, 0, 1e-4f }; SetFrame(g_P.drop, hs, g_P.magP); }
         if (simulate && g_GetLTM && g_P.root)
         {
             float* ltm = g_GetLTM(g_P.mag);                     // magazine world pose right now (still sitting at the bottom of its slide)
@@ -600,20 +601,9 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                 float l0 = sqrtf(A[0] * A[0] + A[1] * A[1] + A[2] * A[2]); for (int i = 0; i < 3; ++i) A[i] /= l0;
                 A[6] = A[1] * A[5] - A[2] * A[4]; A[7] = A[2] * A[3] - A[0] * A[5]; A[8] = A[0] * A[4] - A[1] * A[3];
                 float wr[9]; memcpy(wr, A, sizeof(wr));
-                float R[9], lp[3];
-                for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) R[i * 3 + j] = wr[i * 3] * P[j * 4] + wr[i * 3 + 1] * P[j * 4 + 1] + wr[i * 3 + 2] * P[j * 4 + 2];
-                float d[3] = { W[12] + hx * xyOff - P[12], W[13] + hy * xyOff - P[13], zNow - P[14] };
-                for (int j = 0; j < 3; ++j) lp[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
-                SetFrame(tgt, R, lp);
-                if (landed && g_GetLTM)
-                {
-                    static uint32_t lastLog = 0; static int nLog = 0;
-                    if (now - lastLog > 300 && nLog < 40)
-                    {
-                        lastLog = now; ++nLog; float* L = g_GetLTM(tgt);
-                        if (L) LOGI("rest: want %.3f %.3f %.3f got %.3f %.3f %.3f", W[12] + hx * xyOff, W[13] + hy * xyOff, zNow, L[12], L[13], L[14]);
-                    }
-                }
+                memcpy(g_DropR, wr, sizeof(wr));                            // world pose of the fallen magazine; it is applied right before the weapon is drawn
+                g_DropPos[0] = W[12] + hx * xyOff; g_DropPos[1] = W[13] + hy * xyOff; g_DropPos[2] = zNow;
+                g_DropValid = true;
             }
         }
         if (hideMag) { const float hs[9] = { 1e-4f, 0, 0, 0, 1e-4f, 0, 0, 0, 1e-4f }; SetFrame(g_P.mag, hs, pos); }
@@ -629,6 +619,24 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         float pos[3] = { g_P.boltP[0] + g_BoltBack * bolt, g_P.boltP[1], g_P.boltP[2] };
         SetFrame(g_P.bolt, kI3, pos);
     }
+}
+typedef void* (*ClumpR_t)(void*);
+static ClumpR_t g_ClumpRenderOrig = nullptr;
+static void* ClumpRender_hook(void* clump)
+{
+    if (g_DropValid && clump && clump == g_P.clump && g_P.drop && g_P.root && g_GetLTM)
+    {
+        float* P = g_GetLTM(g_P.root);                      // the weapon's world pose exactly as it is about to be drawn
+        if (P)
+        {
+            float R[9], lp[3];
+            for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) R[i * 3 + j] = g_DropR[i * 3] * P[j * 4] + g_DropR[i * 3 + 1] * P[j * 4 + 1] + g_DropR[i * 3 + 2] * P[j * 4 + 2];
+            float d[3] = { g_DropPos[0] - P[12], g_DropPos[1] - P[13], g_DropPos[2] - P[14] };
+            for (int j = 0; j < 3; ++j) lp[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
+            SetFrame(g_P.drop, R, lp);
+        }
+    }
+    return g_ClumpRenderOrig(clump);
 }
 static void PedRender_hook(void* ped)
 {
@@ -698,6 +706,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_FindGroundZ   = (FindGroundZ_t)ResolveExact("_ZN6CWorld19FindGroundZForCoordEff");
     LOGI("FrameName=%p ForChildren=%p FindPlayerPed=%p FrameUpdate=%p Timer=%p GetLTM=%p Ground=%p", (void*)g_FrameName, (void*)g_ForChildren, (void*)g_FindPlayerPed, (void*)g_FrameUpdate, (void*)g_TimerMs, (void*)g_GetLTM, (void*)g_FindGroundZ);
     Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
+    Install("_Z13RpClumpRenderP7RpClump", (void*)ClumpRender_hook, &g_ClumpRenderOrig);
     Install("_ZN12CAnimManager21CreateAnimAssocGroupsEv", (void*)CreateGroups_hook, &g_CreateGroupsOrig);
     Install("_ZN11CWeaponInfo14LoadWeaponDataEv", (void*)LoadWeaponData_hook, &g_LoadWeaponDataOrig);
 }
