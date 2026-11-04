@@ -111,6 +111,22 @@ static int  g_AkOffset = 0x1c;    // byte offset in CWeaponInfo of the anim grou
 static std::string g_AkGroup = "ar15", g_AkGroupPoor = "ar15bad";
 static std::string g_Template = "rifle", g_TemplateBad = "riflebad";   // vanilla groups whose descriptor table we copy
 static int  g_AkType = 30;
+// settings (SanVive.ini)
+static int   g_Animate = 1;
+static float g_ReloadMs = 1000.f;                    // used only when the real reload time can't be read
+static float g_ReloadSpeed = 0.45f;                  // reload animation speed (1 = normal, lower = slower)
+static int   g_ExtendReload = 1;                     // keep the reload state alive for the slowed animation
+static float g_MagOut1 = 0.16f, g_MagOut2 = 0.22f;   // magazine slides out of the gun (progress 0..1)
+static float g_MagIn1 = 0.55f, g_MagIn2 = 0.88f;     // new magazine slides in
+static float g_MagDrop = 0.30f;                      // how far the magazine slides down before it is released
+static float g_Gravity = 9.8f, g_Bounce = 0.25f;     // fall (m/s^2) and bounce factor on the ground
+static float g_GroundOff = 0.05f;                    // height of the magazine origin above the ground when it lies there (m)
+static float g_Tilt = 1.4f;                          // radians the magazine tumbles until it lies on the ground
+static float g_BoltBack = -0.074f, g_BoltAt = 0.90f; // bolt travel (m) and reload progress at which it is racked
+static float g_FireBoltStart = 50, g_FireBoltHold = 25, g_FireBoltEnd = 50;
+static float g_ReloadBoltStart = 50, g_ReloadBoltHold = 200, g_ReloadBoltEnd = 50;
+
+
 
 static void SplitList(const char* v, std::vector<std::string>& out)
 {
@@ -151,6 +167,21 @@ static void LoadConfig()
         else if (!strcmp(k, "AkGroup")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroup = t[0]; }
         else if (!strcmp(k, "Template")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_Template = t[0]; }
         else if (!strcmp(k, "TemplateBad")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_TemplateBad = t[0]; }
+        else if (!strcmp(k, "Animate")) g_Animate = atoi(v);
+        else if (!strcmp(k, "ReloadMs")) g_ReloadMs = (float)atof(v);
+        else if (!strcmp(k, "ReloadSpeed")) { g_ReloadSpeed = (float)atof(v); if (g_ReloadSpeed < 0.1f) g_ReloadSpeed = 0.1f; if (g_ReloadSpeed > 2.f) g_ReloadSpeed = 2.f; }
+        else if (!strcmp(k, "ExtendReload")) g_ExtendReload = atoi(v);
+        else if (!strcmp(k, "MagOut1")) g_MagOut1 = (float)atof(v);
+        else if (!strcmp(k, "MagOut2")) g_MagOut2 = (float)atof(v);
+        else if (!strcmp(k, "MagIn1")) g_MagIn1 = (float)atof(v);
+        else if (!strcmp(k, "MagIn2")) g_MagIn2 = (float)atof(v);
+        else if (!strcmp(k, "MagDrop")) g_MagDrop = (float)atof(v);
+        else if (!strcmp(k, "Gravity")) g_Gravity = (float)atof(v);
+        else if (!strcmp(k, "Bounce")) g_Bounce = (float)atof(v);
+        else if (!strcmp(k, "GroundOffset")) g_GroundOff = (float)atof(v);
+        else if (!strcmp(k, "MagTilt")) g_Tilt = (float)atof(v);
+        else if (!strcmp(k, "BoltBack")) g_BoltBack = (float)atof(v);
+        else if (!strcmp(k, "BoltAt")) g_BoltAt = (float)atof(v);
         else if (!strcmp(k, "AkGroupPoor")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroupPoor = t[0]; }
     }
     fclose(f);
@@ -342,6 +373,192 @@ template <class T> static bool Install(const char* sym, void* hook, T* orig)
     return true;
 }
 
+
+// ================================================================ AK parts: magazine (falls to the ground) and bolt
+typedef const char* (*GetFrameNodeName_t)(void*);
+typedef void* (*FrameForAllChildren_t)(void*, void* (*)(void*, void*), void*);
+typedef void* (*FindPlayerPed_t)(int);
+typedef void* (*FrameUpdateObjects_t)(void*);
+typedef float* (*GetLTM_t)(void*);
+typedef void* (*GetAssocId_t)(void*, unsigned);
+typedef float (*FindGroundZ_t)(float, float);
+typedef void (*PedRender_t)(void*);
+static GetFrameNodeName_t g_FrameName = nullptr;
+static FrameForAllChildren_t g_ForChildren = nullptr;
+static FindPlayerPed_t g_FindPlayerPed = nullptr;
+static FrameUpdateObjects_t g_FrameUpdate = nullptr;
+static GetLTM_t g_GetLTM = nullptr;
+static GetAssocId_t g_GetAssocId = nullptr;
+static FindGroundZ_t g_FindGroundZ = nullptr;
+static uint32_t* g_TimerMs = nullptr;
+static PedRender_t g_PedRenderOrig = nullptr;
+
+struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr; float magP[3] = {0}, boltP[3] = {0}; };
+static Parts g_P;
+static void CollectFrame(void* f, Parts* p);
+static void* CollectCb(void* f, void* d) { CollectFrame(f, (Parts*)d); return f; }
+static void CollectFrame(void* f, Parts* p)
+{
+    if (!f) return;
+    const char* nm = g_FrameName(f);
+    float* m = (float*)((uint8_t*)f + 0x20);           // RwFrame::modelling: right, flags, up, pad, at, pad, pos
+    if (nm)
+    {
+        if (!p->mag  && !strcmp(nm, "magazine")) { p->mag  = f; memcpy(p->magP,  m + 12, 12); }
+        if (!p->bolt && !strcmp(nm, "bolt"))     { p->bolt = f; memcpy(p->boltP, m + 12, 12); }
+    }
+    g_ForChildren(f, CollectCb, p);
+}
+static float Smooth(float t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); return t * t * (3 - 2 * t); }
+static float Profile(float t, float start, float hold, float end)   // 0 -> 1 over start ms, stays hold ms, back to 0 over end ms
+{
+    if (t < 0) return 0;
+    if (t < start) return Smooth(t / start);
+    if (t < start + hold) return 1;
+    if (t < start + hold + end) return 1 - Smooth((t - start - hold) / end);
+    return 0;
+}
+// sets the frame's modelling matrix: right (rx,ry,rz), up, at, position
+static void SetFrame(void* frame, const float* R, const float* pos)
+{
+    float* m = (float*)((uint8_t*)frame + 0x20);
+    for (int i = 0; i < 3; ++i) { m[i] = R[i]; m[4 + i] = R[3 + i]; m[8 + i] = R[6 + i]; m[12 + i] = pos[i]; }
+    if (g_FrameUpdate) g_FrameUpdate(frame);
+}
+static const float kI3[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+
+static void Animate(void* ped, const uint8_t* wp, int state)
+{
+    static int lastClip = -1; static uint32_t lastIn2 = 0, reloadStart = 0, shotTime = 0, rackTime = 0;
+    static bool reloadActive = false, racked = false, dirty = false;
+    static float reloadDur = 3000.f, lastGoodDur = 0.f;
+    static uint32_t gStart = 0;
+    static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
+    uint32_t now = g_TimerMs ? *g_TimerMs : 0;
+    int clip = *(const int*)(wp + 8);
+    if (lastClip >= 0 && clip < lastClip && state != 2) shotTime = now;           // a bullet was fired
+    lastClip = clip;
+    if (state == 2) lastIn2 = now;
+    if (state == 2 && !reloadActive)
+    {
+        reloadActive = true; reloadStart = now; released = false; racked = false; rackTime = 0;
+        float d = 0;
+        if (g_TimerMs) d = (float)(int)(*(const uint32_t*)(wp + 0x10) - *g_TimerMs);
+        if (d >= 300.f && d <= 8000.f) lastGoodDur = d;
+        reloadDur = (lastGoodDur > 0 ? lastGoodDur : g_ReloadMs) / g_ReloadSpeed;
+        LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
+    }
+    if (state == 2 && g_TimerMs && g_ExtendReload)                                  // keep the reload alive for the whole slowed animation
+    {
+        if (reloadActive && gStart == 0) gStart = *g_TimerMs;
+        uint32_t want = gStart + (uint32_t)reloadDur;
+        uint32_t* tf = (uint32_t*)(wp + 0x10);
+        if (*tf < want && *tf + 20000 > want) *tf = want;
+    }
+    if (state != 2) gStart = 0;
+    if (reloadActive && state != 2 && now - lastIn2 > 200) reloadActive = false;
+    bool reloading = reloadActive;
+    if (reloading && g_ReloadSpeed != 1.f && g_GetAssocId)                          // slow the reload animation down
+    {
+        void* pc = *(void**)((uint8_t*)ped + 0x20);
+        for (unsigned id = 226; id <= 227 && pc; ++id)
+        {
+            uint8_t* a = (uint8_t*)g_GetAssocId(pc, id);
+            if (!a) continue;
+            float* sp = (float*)(a + 0x3C);
+            if (*sp > 0.05f && *sp < 5.f) *sp = g_ReloadSpeed;
+        }
+    }
+    float p = 0;
+    if (reloading) { p = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; if (p > 1) p = 1; }
+    if (reloading && !racked && p >= g_BoltAt) { racked = true; rackTime = now; }
+    float bolt = Profile(shotTime ? (float)(now - shotTime) : 100000.f, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
+    if (rackTime) { float r = Profile((float)(now - rackTime), g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd); if (r > bolt) bolt = r; }
+    bool active = reloading || bolt > 0;
+    if (!active && !dirty) return;
+    dirty = active;
+    // ---- magazine
+    if (g_P.mag)
+    {
+        float pos[3] = { g_P.magP[0], g_P.magP[1], g_P.magP[2] };
+        bool fallingNow = false;
+        if (reloading)
+        {
+            if (p >= g_MagOut1 && p < g_MagOut2) pos[2] -= g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
+            else if (p >= g_MagOut2 && p < g_MagIn1) { pos[2] -= g_MagDrop; fallingNow = true; }
+            else if (p >= g_MagIn1 && p < g_MagIn2) pos[2] -= g_MagDrop * (1 - Smooth((p - g_MagIn1) / (g_MagIn2 - g_MagIn1)));
+        }
+        if (fallingNow && g_GetLTM && g_P.root)
+        {
+            float* ltm = g_GetLTM(g_P.mag);                     // magazine world pose right now (still sitting at the bottom of its slide)
+            float* P = g_GetLTM(g_P.root);                      // parent (weapon) world pose
+            if (ltm && P)
+            {
+                if (!released)
+                {
+                    released = true; memcpy(W, ltm, sizeof(W)); fallT0 = now; lastT = now; vz = 0; zNow = W[14];
+                    float gz = g_FindGroundZ ? g_FindGroundZ(W[12], W[13]) : -1000.f;
+                    void* pf = *(void**)((uint8_t*)*(void**)((uint8_t*)ped + 0x20) + 8);
+                    float* pl = pf ? g_GetLTM(pf) : nullptr;      // ped world position (origin ~1 m above the ground)
+                    if (!(gz > W[14] - 4.f && gz < W[14] + 0.5f)) gz = pl ? pl[14] - 1.0f : W[14] - 1.0f;
+                    groundZ = gz;
+                    LOGI("magazine released at z=%.2f ground z=%.2f", W[14], gz);
+                }
+                float dt = (float)(now - lastT) * 0.001f; if (dt > 0.05f) dt = 0.05f; lastT = now;
+                vz -= g_Gravity * dt; zNow += vz * dt;
+                float floorZ = groundZ + g_GroundOff;
+                if (zNow <= floorZ) { zNow = floorZ; vz = (vz < -1.0f) ? -vz * g_Bounce : 0.f; }
+                float th = g_Tilt * Smooth((float)(now - fallT0) / 400.f), c = cosf(th), sn = sinf(th);   // tumbles about its own side axis until it lies down
+                float wr[9] = { c * W[0] - sn * W[8], c * W[1] - sn * W[9], c * W[2] - sn * W[10],
+                                W[4], W[5], W[6],
+                                sn * W[0] + c * W[8], sn * W[1] + c * W[9], sn * W[2] + c * W[10] };
+                float R[9], lp[3];
+                for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) R[i * 3 + j] = wr[i * 3] * P[j * 4] + wr[i * 3 + 1] * P[j * 4 + 1] + wr[i * 3 + 2] * P[j * 4 + 2];
+                float d[3] = { W[12] - P[12], W[13] - P[13], zNow - P[14] };
+                for (int j = 0; j < 3; ++j) lp[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
+                SetFrame(g_P.mag, R, lp);
+            }
+        }
+        else
+        {
+            if (p >= g_MagIn1) released = false;
+            SetFrame(g_P.mag, kI3, pos);
+        }
+    }
+    // ---- bolt
+    if (g_P.bolt)
+    {
+        float pos[3] = { g_P.boltP[0] + g_BoltBack * bolt, g_P.boltP[1], g_P.boltP[2] };
+        SetFrame(g_P.bolt, kI3, pos);
+    }
+}
+static void PedRender_hook(void* ped)
+{
+    if (g_Animate && g_FindPlayerPed && g_FrameName && g_ForChildren && ped == g_FindPlayerPed(0))
+    {
+        void* clump = *(void**)((uint8_t*)ped + 0x650);          // CPed::m_pWeaponObject (RpClump*)
+        int8_t slot = *(int8_t*)((uint8_t*)ped + 0x8dc);
+        if (clump && slot >= 0 && slot < 13)
+        {
+            const uint8_t* wp = (const uint8_t*)ped + 0x730 + slot * 32;
+            int type = *(const int*)wp, state = *(const int*)(wp + 4);
+            if (type == g_AkType)
+            {
+                if (g_P.clump != clump)
+                {
+                    g_P = Parts(); g_P.clump = clump;
+                    g_P.root = *(void**)((uint8_t*)clump + 8);   // RwObject::parent = RwFrame*
+                    CollectFrame(g_P.root, &g_P);
+                    LOGI("AK parts: magazine=%p bolt=%p", g_P.mag, g_P.bolt);
+                }
+                Animate(ped, wp, state);
+            }
+            else g_P.clump = nullptr;
+        }
+    }
+    g_PedRenderOrig(ped);
+}
+
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
 {
     g_Dir = DetectDir();
@@ -370,6 +587,16 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
          (void*)g_StreamClose, (void*)g_Defs, (void*)g_NumDefs, g_StdDescs);
     if (!g_AddDef || !g_AddAnim || !g_RegBlock || !g_LoadAnim || !g_StreamOpen || !g_StreamClose || !g_Defs || !g_NumDefs || !g_StdDescs)
     { LOGE("missing symbols, nothing hooked"); return; }
+    g_FrameName     = (GetFrameNodeName_t)ResolveExact("_Z16GetFrameNodeNameP7RwFrame");
+    g_ForChildren   = (FrameForAllChildren_t)ResolveExact("_Z21RwFrameForAllChildrenP7RwFramePFS0_S0_PvES1_");
+    g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
+    g_FrameUpdate   = (FrameUpdateObjects_t)ResolveExact("_Z20RwFrameUpdateObjectsP7RwFrame");
+    g_GetAssocId    = (GetAssocId_t)ResolveExact("_Z30RpAnimBlendClumpGetAssociationP7RpClumpj");
+    g_GetLTM        = (GetLTM_t)ResolveExact("_Z13RwFrameGetLTMP7RwFrame");
+    g_TimerMs       = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
+    g_FindGroundZ   = (FindGroundZ_t)ResolveExact("_ZN6CWorld19FindGroundZForCoordEff");
+    LOGI("FrameName=%p ForChildren=%p FindPlayerPed=%p FrameUpdate=%p Timer=%p GetLTM=%p Ground=%p", (void*)g_FrameName, (void*)g_ForChildren, (void*)g_FindPlayerPed, (void*)g_FrameUpdate, (void*)g_TimerMs, (void*)g_GetLTM, (void*)g_FindGroundZ);
+    Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
     Install("_ZN12CAnimManager21CreateAnimAssocGroupsEv", (void*)CreateGroups_hook, &g_CreateGroupsOrig);
     Install("_ZN11CWeaponInfo14LoadWeaponDataEv", (void*)LoadWeaponData_hook, &g_LoadWeaponDataOrig);
 }
