@@ -120,8 +120,9 @@ static float g_MagOut1 = 0.16f, g_MagOut2 = 0.22f;   // magazine slides out of t
 static float g_MagIn1 = 0.55f, g_MagIn2 = 0.88f;     // new magazine slides in
 static float g_MagDrop = 0.30f;                      // how far the magazine slides down before it is released
 static float g_Gravity = 9.8f, g_Bounce = 0.25f;     // fall (m/s^2) and bounce factor on the ground
-static float g_GroundOff = 0.05f;                    // height of the magazine origin above the ground when it lies there (m)
-static float g_Tilt = 1.4f;                          // radians the magazine tumbles until it lies on the ground
+static float g_GroundOff = 0.035f;                    // height of the magazine origin above the ground when it lies there (m)
+static float g_Tilt = 1.4f;
+static float g_LandMs = 450.f;                          // radians the magazine tumbles until it lies on the ground
 static float g_BoltBack = -0.074f, g_BoltAt = 0.90f; // bolt travel (m) and reload progress at which it is racked
 static float g_FireBoltStart = 50, g_FireBoltHold = 25, g_FireBoltEnd = 50;
 static float g_ReloadBoltStart = 50, g_ReloadBoltHold = 200, g_ReloadBoltEnd = 50;
@@ -513,10 +514,21 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                 vz -= g_Gravity * dt; zNow += vz * dt;
                 float floorZ = groundZ + g_GroundOff;
                 if (zNow <= floorZ) { zNow = floorZ; vz = (vz < -1.0f) ? -vz * g_Bounce : 0.f; }
-                float th = g_Tilt * Smooth((float)(now - fallT0) / 400.f), c = cosf(th), sn = sinf(th);   // tumbles about its own side axis until it lies down
-                float wr[9] = { c * W[0] - sn * W[8], c * W[1] - sn * W[9], c * W[2] - sn * W[10],
-                                W[4], W[5], W[6],
-                                sn * W[0] + c * W[8], sn * W[1] + c * W[9], sn * W[2] + c * W[10] };
+                // target resting pose: side face down (local y = world up), long axis horizontal
+                float hx = W[0], hy = W[1], hl = sqrtf(hx * hx + hy * hy);
+                if (hl < 0.2f) { hx = W[8]; hy = W[9]; hl = sqrtf(hx * hx + hy * hy); }
+                if (hl < 1e-4f) { hx = 1; hy = 0; hl = 1; }
+                hx /= hl; hy /= hl;
+                float T[9] = { hx, hy, 0,  0, 0, 1,  hy, -hx, 0 };      // x = heading, y = up, z = x cross y
+                float u = Smooth((float)(now - fallT0) / g_LandMs);
+                float A[9];
+                for (int i = 0; i < 3; ++i) { A[i] = W[i] * (1 - u) + T[i] * u; A[3 + i] = W[4 + i] * (1 - u) + T[3 + i] * u; }
+                float l1 = sqrtf(A[3] * A[3] + A[4] * A[4] + A[5] * A[5]); for (int i = 3; i < 6; ++i) A[i] /= l1;
+                float dp = A[0] * A[3] + A[1] * A[4] + A[2] * A[5];
+                for (int i = 0; i < 3; ++i) A[i] -= dp * A[3 + i];
+                float l0 = sqrtf(A[0] * A[0] + A[1] * A[1] + A[2] * A[2]); for (int i = 0; i < 3; ++i) A[i] /= l0;
+                A[6] = A[1] * A[5] - A[2] * A[4]; A[7] = A[2] * A[3] - A[0] * A[5]; A[8] = A[0] * A[4] - A[1] * A[3];
+                float wr[9]; memcpy(wr, A, sizeof(wr));
                 float R[9], lp[3];
                 for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) R[i * 3 + j] = wr[i * 3] * P[j * 4] + wr[i * 3 + 1] * P[j * 4 + 1] + wr[i * 3 + 2] * P[j * 4 + 2];
                 float d[3] = { W[12] - P[12], W[13] - P[13], zNow - P[14] };
