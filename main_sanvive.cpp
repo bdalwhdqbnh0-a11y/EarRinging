@@ -122,7 +122,8 @@ static float g_MagDrop = 0.30f;                      // how far the magazine sli
 static float g_Gravity = 9.8f, g_Bounce = 0.25f;     // fall (m/s^2) and bounce factor on the ground
 static float g_GroundOff = 0.035f;                    // height of the magazine origin above the ground when it lies there (m)
 static float g_Tilt = 1.4f;
-static float g_LandMs = 450.f;                          // radians the magazine tumbles until it lies on the ground
+static float g_LandMs = 450.f;
+static float g_HandOff[3] = { 0, 0, 0 };            // magazine position inside the left hand (hand-local axes)                          // radians the magazine tumbles until it lies on the ground
 static float g_BoltBack = -0.074f, g_BoltAt = 0.90f; // bolt travel (m) and reload progress at which it is racked
 static float g_FireBoltStart = 50, g_FireBoltHold = 25, g_FireBoltEnd = 50;
 static float g_ReloadBoltStart = 50, g_ReloadBoltHold = 200, g_ReloadBoltEnd = 50;
@@ -181,6 +182,9 @@ static void LoadConfig()
         else if (!strcmp(k, "Bounce")) g_Bounce = (float)atof(v);
         else if (!strcmp(k, "GroundOffset")) g_GroundOff = (float)atof(v);
         else if (!strcmp(k, "MagTilt")) g_Tilt = (float)atof(v);
+        else if (!strcmp(k, "HandX")) g_HandOff[0] = (float)atof(v);
+        else if (!strcmp(k, "HandY")) g_HandOff[1] = (float)atof(v);
+        else if (!strcmp(k, "HandZ")) g_HandOff[2] = (float)atof(v);
         else if (!strcmp(k, "BoltBack")) g_BoltBack = (float)atof(v);
         else if (!strcmp(k, "BoltAt")) g_BoltAt = (float)atof(v);
         else if (!strcmp(k, "AkGroupPoor")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroupPoor = t[0]; }
@@ -394,7 +398,7 @@ static FindGroundZ_t g_FindGroundZ = nullptr;
 static uint32_t* g_TimerMs = nullptr;
 static PedRender_t g_PedRenderOrig = nullptr;
 
-struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr; float magP[3] = {0}, boltP[3] = {0}; };
+struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr, *lhand = nullptr; float magP[3] = {0}, boltP[3] = {0}; };
 static Parts g_P;
 static void CollectFrame(void* f, Parts* p);
 static void* CollectCb(void* f, void* d) { CollectFrame(f, (Parts*)d); return f; }
@@ -411,6 +415,16 @@ static void CollectFrame(void* f, Parts* p)
     }
     g_ForChildren(f, CollectCb, p);
 }
+struct FindHand { void* res = nullptr; };
+static void* FindHandCb(void* f, void* d);
+static void FindHandIn(void* f, FindHand* h)
+{
+    if (!f || h->res) return;
+    const char* nm = g_FrameName(f);
+    if (nm && strstr(nm, "L Hand") && !strstr(nm, "Finger")) { h->res = f; return; }
+    g_ForChildren(f, FindHandCb, h);
+}
+static void* FindHandCb(void* f, void* d) { FindHandIn(f, (FindHand*)d); return f; }
 static float Smooth(float t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); return t * t * (3 - 2 * t); }
 static float Profile(float t, float start, float hold, float end)   // 0 -> 1 over start ms, stays hold ms, back to 0 over end ms
 {
@@ -487,9 +501,32 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         bool fallingNow = false, hideMag = false;
         if (reloading)
         {
-            if (p >= g_MagOut1 && p < g_MagOut2) pos[2] -= g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
-            else if (p >= g_MagOut2 && p < g_MagIn1) { pos[2] -= g_MagDrop; fallingNow = true; hideMag = g_P.drop != nullptr; }
-            else if (p >= g_MagIn1 && p < g_MagIn2) pos[2] -= g_MagDrop * (1 - Smooth((p - g_MagIn1) / (g_MagIn2 - g_MagIn1)));
+            float hl[3]; bool haveHand = false;
+            if (g_P.lhand && g_GetLTM && g_P.root)
+            {
+                float* H = g_GetLTM(g_P.lhand); float* P = g_GetLTM(g_P.root);
+                if (H && P)
+                {
+                    float hw[3];
+                    for (int j = 0; j < 3; ++j) hw[j] = H[12 + j] + g_HandOff[0] * H[j] + g_HandOff[1] * H[4 + j] + g_HandOff[2] * H[8 + j];
+                    float d[3] = { hw[0] - P[12], hw[1] - P[13], hw[2] - P[14] };
+                    for (int j = 0; j < 3; ++j) hl[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
+                    haveHand = true;
+                }
+            }
+            if (p >= g_MagOut1 && p < g_MagOut2 && haveHand)       // the left hand grabs the magazine and pulls it out
+            {
+                float t = Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
+                for (int j = 0; j < 3; ++j) pos[j] = g_P.magP[j] + (hl[j] - g_P.magP[j]) * t;
+            }
+            else if (p >= g_MagIn1 && p < g_MagIn2 && haveHand)    // new magazine appears in the hand, then goes into the weapon
+            {
+                float t = Smooth(((p - g_MagIn1) / (g_MagIn2 - g_MagIn1) - 0.4f) / 0.6f);
+                for (int j = 0; j < 3; ++j) pos[j] = hl[j] + (g_P.magP[j] - hl[j]) * t;
+            }
+            else if (p >= g_MagOut1 && p < g_MagOut2) pos[2] -= g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
+            else if (p >= g_MagOut2 && p < g_MagIn1) { if (!g_P.lhand) pos[2] -= g_MagDrop; fallingNow = true; hideMag = g_P.drop != nullptr; }
+            else if (p >= g_MagIn1 && p < g_MagIn2 && !haveHand) pos[2] -= g_MagDrop * (1 - Smooth((p - g_MagIn1) / (g_MagIn2 - g_MagIn1)));
         }
         void* tgt = g_P.drop ? g_P.drop : g_P.mag;
         bool simulate = g_P.drop ? ((reloading && p >= g_MagOut2) || linger) : fallingNow;
@@ -567,7 +604,8 @@ static void PedRender_hook(void* ped)
                     g_P = Parts(); g_P.clump = clump;
                     g_P.root = *(void**)((uint8_t*)clump + 8);   // RwObject::parent = RwFrame*
                     CollectFrame(g_P.root, &g_P);
-                    LOGI("AK parts: magazine=%p bolt=%p magdrop=%p", g_P.mag, g_P.bolt, g_P.drop);
+                    { FindHand fh; void* pc = *(void**)((uint8_t*)ped + 0x20); void* pr = pc ? *(void**)((uint8_t*)pc + 8) : nullptr; FindHandIn(pr, &fh); g_P.lhand = fh.res; }
+                    LOGI("AK parts: magazine=%p bolt=%p magdrop=%p lhand=%p", g_P.mag, g_P.bolt, g_P.drop, g_P.lhand);
                 }
                 Animate(ped, wp, state);
             }
