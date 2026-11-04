@@ -114,7 +114,7 @@ static int  g_AkType = 30;
 // settings (SanVive.ini)
 static int   g_Animate = 1;
 static float g_ReloadMs = 1000.f;                    // used only when the real reload time can't be read
-static float g_ReloadSpeed = 0.45f;                  // reload animation speed (1 = normal, lower = slower)
+static float g_ReloadSpeed = 0.75f;                  // reload animation speed (1 = normal, lower = slower)
 static int   g_ExtendReload = 1;                     // keep the reload state alive for the slowed animation
 static float g_MagOut1 = 0.16f, g_MagOut2 = 0.22f;   // magazine slides out of the gun (progress 0..1)
 static float g_MagIn1 = 0.55f, g_MagIn2 = 0.88f;     // new magazine slides in
@@ -393,7 +393,7 @@ static FindGroundZ_t g_FindGroundZ = nullptr;
 static uint32_t* g_TimerMs = nullptr;
 static PedRender_t g_PedRenderOrig = nullptr;
 
-struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr; float magP[3] = {0}, boltP[3] = {0}; };
+struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr; float magP[3] = {0}, boltP[3] = {0}; };
 static Parts g_P;
 static void CollectFrame(void* f, Parts* p);
 static void* CollectCb(void* f, void* d) { CollectFrame(f, (Parts*)d); return f; }
@@ -405,6 +405,7 @@ static void CollectFrame(void* f, Parts* p)
     if (nm)
     {
         if (!p->mag  && !strcmp(nm, "magazine")) { p->mag  = f; memcpy(p->magP,  m + 12, 12); }
+        if (!p->drop && !strcmp(nm, "magdrop"))  { p->drop = f; }
         if (!p->bolt && !strcmp(nm, "bolt"))     { p->bolt = f; memcpy(p->boltP, m + 12, 12); }
     }
     g_ForChildren(f, CollectCb, p);
@@ -433,7 +434,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     static bool reloadActive = false, racked = false, dirty = false;
     static float reloadDur = 3000.f, lastGoodDur = 0.f;
     static uint32_t gStart = 0;
-    static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
+    static uint32_t lingerUntil = 0; static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
     uint32_t now = g_TimerMs ? *g_TimerMs : 0;
     int clip = *(const int*)(wp + 8);
     if (lastClip >= 0 && clip < lastClip && state != 2) shotTime = now;           // a bullet was fired
@@ -456,7 +457,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (*tf < want && *tf + 20000 > want) *tf = want;
     }
     if (state != 2) gStart = 0;
-    if (reloadActive && state != 2 && now - lastIn2 > 200) reloadActive = false;
+    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; lingerUntil = now + 2500; }
     bool reloading = reloadActive;
     if (reloading && g_ReloadSpeed != 1.f && g_GetAssocId)                          // slow the reload animation down
     {
@@ -474,21 +475,25 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     if (reloading && !racked && p >= g_BoltAt) { racked = true; rackTime = now; }
     float bolt = Profile(shotTime ? (float)(now - shotTime) : 100000.f, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
     if (rackTime) { float r = Profile((float)(now - rackTime), g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd); if (r > bolt) bolt = r; }
-    bool active = reloading || bolt > 0;
+    bool linger = g_P.drop && released && !reloading && now < lingerUntil;
+    bool active = reloading || bolt > 0 || linger;
     if (!active && !dirty) return;
     dirty = active;
     // ---- magazine
     if (g_P.mag)
     {
         float pos[3] = { g_P.magP[0], g_P.magP[1], g_P.magP[2] };
-        bool fallingNow = false;
+        bool fallingNow = false, hideMag = false;
         if (reloading)
         {
             if (p >= g_MagOut1 && p < g_MagOut2) pos[2] -= g_MagDrop * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
-            else if (p >= g_MagOut2 && p < g_MagIn1) { pos[2] -= g_MagDrop; fallingNow = true; }
+            else if (p >= g_MagOut2 && p < g_MagIn1) { pos[2] -= g_MagDrop; fallingNow = true; hideMag = g_P.drop != nullptr; }
             else if (p >= g_MagIn1 && p < g_MagIn2) pos[2] -= g_MagDrop * (1 - Smooth((p - g_MagIn1) / (g_MagIn2 - g_MagIn1)));
         }
-        if (fallingNow && g_GetLTM && g_P.root)
+        void* tgt = g_P.drop ? g_P.drop : g_P.mag;
+        bool simulate = g_P.drop ? ((reloading && p >= g_MagOut2) || linger) : fallingNow;
+        if (g_P.drop && !simulate) { const float hs[9] = { 1e-4f, 0, 0, 0, 1e-4f, 0, 0, 0, 1e-4f }; SetFrame(g_P.drop, hs, g_P.magP); }
+        if (simulate && g_GetLTM && g_P.root)
         {
             float* ltm = g_GetLTM(g_P.mag);                     // magazine world pose right now (still sitting at the bottom of its slide)
             float* P = g_GetLTM(g_P.root);                      // parent (weapon) world pose
@@ -516,12 +521,13 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                 for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) R[i * 3 + j] = wr[i * 3] * P[j * 4] + wr[i * 3 + 1] * P[j * 4 + 1] + wr[i * 3 + 2] * P[j * 4 + 2];
                 float d[3] = { W[12] - P[12], W[13] - P[13], zNow - P[14] };
                 for (int j = 0; j < 3; ++j) lp[j] = d[0] * P[j * 4] + d[1] * P[j * 4 + 1] + d[2] * P[j * 4 + 2];
-                SetFrame(g_P.mag, R, lp);
+                SetFrame(tgt, R, lp);
             }
         }
-        else
+        if (hideMag) { const float hs[9] = { 1e-4f, 0, 0, 0, 1e-4f, 0, 0, 0, 1e-4f }; SetFrame(g_P.mag, hs, pos); }
+        else if (!(fallingNow && !g_P.drop && simulate))
         {
-            if (p >= g_MagIn1) released = false;
+            if (!g_P.drop && p >= g_MagIn1) released = false;
             SetFrame(g_P.mag, kI3, pos);
         }
     }
@@ -549,7 +555,7 @@ static void PedRender_hook(void* ped)
                     g_P = Parts(); g_P.clump = clump;
                     g_P.root = *(void**)((uint8_t*)clump + 8);   // RwObject::parent = RwFrame*
                     CollectFrame(g_P.root, &g_P);
-                    LOGI("AK parts: magazine=%p bolt=%p", g_P.mag, g_P.bolt);
+                    LOGI("AK parts: magazine=%p bolt=%p magdrop=%p", g_P.mag, g_P.bolt, g_P.drop);
                 }
                 Animate(ped, wp, state);
             }
