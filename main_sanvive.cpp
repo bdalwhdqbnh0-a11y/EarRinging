@@ -107,6 +107,7 @@ static uintptr_t ResolveExact(const char* name)
 // ---------------------------------------------------------------- settings (SanVive.ini)
 static std::vector<std::string> g_Groups = { "ar15", "ar15bad" };   // groups to add
 static std::vector<std::string> g_Blocks = { "ar15" };              // ifp blocks to load (anims/<name>.ifp)
+static int  g_AkAnim = 0;         // 1 = give the AK-47 the 'ar15' animations (0 = AK keeps the vanilla rifle animations)
 static int  g_AkOffset = 0x1c;    // byte offset in CWeaponInfo of the anim group id (0x1c, found in the log)
 static std::string g_AkGroup = "ar15", g_AkGroupPoor = "ar15bad";
 static std::string g_Template = "rifle", g_TemplateBad = "riflebad";   // vanilla groups whose descriptor table we copy
@@ -165,6 +166,7 @@ static void LoadConfig()
         while (*k == ' ') ++k;
         if (!strcmp(k, "Groups")) SplitList(v, g_Groups);
         else if (!strcmp(k, "Blocks")) SplitList(v, g_Blocks);
+        else if (!strcmp(k, "AkAnim")) g_AkAnim = atoi(v);
         else if (!strcmp(k, "AkOffset")) { int o = atoi(v); if (o > 0) g_AkOffset = o; }
         else if (!strcmp(k, "AkType")) g_AkType = atoi(v);
         else if (!strcmp(k, "AkGroup")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroup = t[0]; }
@@ -353,7 +355,7 @@ static LoadWeaponData_t g_LoadWeaponDataOrig = nullptr;
 static void LoadWeaponData_hook()
 {
     g_LoadWeaponDataOrig();
-    if (!g_GetWeaponInfo) return;
+    if (!g_GetWeaponInfo || !g_AkAnim) return;
     static int calls = 0; ++calls;
     for (int skill = 0; skill < 3; ++skill)
     {
