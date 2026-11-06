@@ -27,3 +27,10 @@ target_include_directories(SanVive PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(SanVive PRIVATE -O2 -Wno-unused-function)
 target_link_libraries(SanVive log dl m)
+
+# --- SleekMove (shoulder camera + shake) ---
+add_library(SleekMove SHARED main_sleek.cpp ${AML_SOURCES})
+target_include_directories(SleekMove PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(SleekMove PRIVATE -O2 -Wno-unused-function)
+target_link_libraries(SleekMove log dl m)
