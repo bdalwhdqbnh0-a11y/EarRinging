@@ -292,12 +292,15 @@ static uint32_t g_LeanMs = 0;
 
 static void (*g_UpdateAnimOrig)(void*) = nullptr;
 static int g_LeanLog = 0;
+static bool g_TiltOn = false; static float g_TiltAxis[3], g_TiltPiv[3];
+typedef void* (*GetHier_t)(void*);
+static GetHier_t g_GetHier = nullptr;
 
 // CEntity::UpdateRpHAnim builds the skeleton (bone matrices) from the root frame, so the tilt must be
 // applied to the root frame just around this call.
 static void UpdateRpHAnim_hook(void* ent)
 {
-    float* m = nullptr; float saved[16]; void* frame = nullptr;
+    float* m = nullptr; void* frame = nullptr;
     if (g_Lean && g_FindPlayerPed && g_FrameUpdate && ent == g_FindPlayerPed(0))
     {
         void* clump = *(void**)((uint8_t*)ent + 0x20);
@@ -306,7 +309,6 @@ static void UpdateRpHAnim_hook(void* ent)
         if (frame)
         {
             m = (float*)((uint8_t*)frame + 0x20);
-            memcpy(saved, m, sizeof(saved));
             uint32_t now = g_TimerMs ? *g_TimerMs : 0;
             if (now != g_LeanMs)
             {
@@ -331,24 +333,47 @@ static void UpdateRpHAnim_hook(void* ent)
             if (inCar || fabsf(g_Roll) < 0.05f) m = nullptr;
             else
             {
-                float a = -g_Roll * 3.14159265f / 180.0f;
-                float f[3] = { m[8], m[9], m[10] };
-                float c = cosf(a), s = sinf(a);
-                auto rot = [&](float* v) {
-                    float dotv = f[0]*v[0] + f[1]*v[1] + f[2]*v[2];
-                    float cr[3] = { f[1]*v[2]-f[2]*v[1], f[2]*v[0]-f[0]*v[2], f[0]*v[1]-f[1]*v[0] };
-                    for (int i = 0; i < 3; ++i) v[i] = v[i]*c + cr[i]*s + f[i]*dotv*(1-c);
-                };
-                float piv[3] = { m[12] - m[4]*0.95f, m[13] - m[5]*0.95f, m[14] - m[6]*0.95f };
-                float rel[3] = { m[12]-piv[0], m[13]-piv[1], m[14]-piv[2] };
-                rot(&m[0]); rot(&m[4]); rot(rel);
-                m[12] = piv[0]+rel[0]; m[13] = piv[1]+rel[1]; m[14] = piv[2]+rel[2];
-                g_FrameUpdate(frame);
+                // remember the tilt axis/pivot (ped frame is NOT changed; we tilt the finished bone matrices below)
+                g_TiltOn = true;
+                g_TiltAxis[0] = m[8]; g_TiltAxis[1] = m[9]; g_TiltAxis[2] = m[10];
+                g_TiltPiv[0] = m[12] - m[4]*0.95f; g_TiltPiv[1] = m[13] - m[5]*0.95f; g_TiltPiv[2] = m[14] - m[6]*0.95f;
             }
         }
     }
     g_UpdateAnimOrig(ent);
-    if (m) { memcpy(m, saved, sizeof(saved)); g_FrameUpdate(frame); }
+    if (g_TiltOn)
+    {
+        g_TiltOn = false;
+        void* clump = *(void**)((uint8_t*)ent + 0x20);
+        if (clump && g_GetHier && !(*(uint8_t*)((uint8_t*)ent + 0x2a) & 0x80))
+        {
+            uint8_t* h = (uint8_t*)g_GetHier(clump);
+            if (h)
+            {
+                int n = *(int*)(h + 4);
+                float* arr = *(float**)(h + 8);
+                if (arr && n > 0 && n < 80)
+                {
+                    float a = -g_Roll * 3.14159265f / 180.0f;
+                    float c = cosf(a), s = sinf(a);
+                    const float* f = g_TiltAxis;
+                    auto rot = [&](float* v) {
+                        float dotv = f[0]*v[0] + f[1]*v[1] + f[2]*v[2];
+                        float cr[3] = { f[1]*v[2]-f[2]*v[1], f[2]*v[0]-f[0]*v[2], f[0]*v[1]-f[1]*v[0] };
+                        for (int i = 0; i < 3; ++i) v[i] = v[i]*c + cr[i]*s + f[i]*dotv*(1-c);
+                    };
+                    for (int i = 0; i < n; ++i)
+                    {
+                        float* b = arr + i * 16;                      // RwMatrix: right, up, at, pos (4 floats each)
+                        rot(b); rot(b + 4); rot(b + 8);
+                        float rel[3] = { b[12]-g_TiltPiv[0], b[13]-g_TiltPiv[1], b[14]-g_TiltPiv[2] };
+                        rot(rel);
+                        b[12] = g_TiltPiv[0]+rel[0]; b[13] = g_TiltPiv[1]+rel[1]; b[14] = g_TiltPiv[2]+rel[2];
+                    }
+                }
+            }
+        }
+    }
 }
 
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
@@ -367,6 +392,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     Install("_ZN4CCam20Process_FollowPed_SAERK7CVectorfffb", (void*)FollowPed_hook, &g_FollowOrig);
     g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
     g_FindPlayerVeh = (FindPlayerVehicle_t)ResolveExact("_Z17FindPlayerVehicleib");
+    g_GetHier       = (GetHier_t)ResolveExact("_Z29GetAnimHierarchyFromSkinClumpP7RpClump");
     g_FrameUpdate   = (FrameUpdateObjects_t)ResolveExact("_Z20RwFrameUpdateObjectsP7RwFrame");
     LOGI("Momentum=%d Lean=%d FindPlayerPed=%p FrameUpdate=%p", g_Momentum, g_Lean, (void*)g_FindPlayerPed, (void*)g_FrameUpdate);
     Install("_ZN4CPad19GetPedWalkLeftRightEv", (void*)LR_hook, &g_LROrig);
