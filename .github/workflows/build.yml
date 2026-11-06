@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -43,3 +46,22 @@ jobs:
         with:
           name: SanVive-arm64
           path: build/libSanVive.so
+
+      - name: Upload SleekMove
+        uses: actions/upload-artifact@v4
+        with:
+          name: SleekMove-arm64
+          path: build/libSleekMove.so
+
+      - name: Publish download link (release "latest")
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          prerelease: true
+          files: |
+            build/libEarRinging.so
+            build/libMyHUD.so
+            build/libSanVive.so
+            build/libSleekMove.so
