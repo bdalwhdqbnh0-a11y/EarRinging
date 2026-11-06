@@ -388,30 +388,29 @@ static void UpdateRpHAnim_hook(void* ent)
                 if (arr && n > 0 && n < 80)
                 {
                     const float D2R = 3.14159265f / 180.0f;
-                    float ar = -g_Roll * D2R;                          // roll about forward axis
-                    float ap = -g_PitchDeg * g_PitchSign * D2R;        // pitch about right axis (forward lean = positive)
                     float fax[3] = { g_TiltAxis[0], g_TiltAxis[1], g_TiltAxis[2] };
                     float rax[3] = { g_RightAxis[0], g_RightAxis[1], g_RightAxis[2] };
-                    RotAxis(fax, ar, rax);                              // right axis after the roll
-                    for (int i = 0; i < n; ++i)
-                    {
-                        float* b = arr + i * 16;                      // RwMatrix: right, up, at, pos (4 floats each)
-                        float rel[3] = { b[12]-g_TiltPiv[0], b[13]-g_TiltPiv[1], b[14]-g_TiltPiv[2] };
-                        float* vs[4] = { b, b + 4, b + 8, rel };
-                        for (float* v : vs) { RotAxis(fax, ar, v); RotAxis(rax, ap, v); }
-                        b[12] = g_TiltPiv[0]+rel[0]; b[13] = g_TiltPiv[1]+rel[1]; b[14] = g_TiltPiv[2]+rel[2];
-                    }
-                    if (g_Head && g_IdIdx)
-                    {
-                        int hi = g_IdIdx(h, 6);                          // 6 = head bone id
-                        if (hi >= 0 && hi < n)
+                    float roll = -g_Roll * D2R, pitch = -g_PitchDeg * g_PitchSign * D2R;
+                    // bone ids (SA): 2 pelvis, 3 spine, 4 chest, 5 neck, 6-8 head, 21-40 shoulders/arms/hands
+                    int idx[48]; for (int id = 0; id < 48; ++id) idx[id] = (id >= 2 && id <= 40) ? g_IdIdx(h, id) : -1;
+                    auto bone = [&](int id) -> float* { return (id >= 0 && id < 48 && idx[id] >= 0 && idx[id] < n) ? arr + idx[id] * 16 : nullptr; };
+                    // bend the upper body in stages: spine, then chest (with shoulders/arms), then neck+head
+                    auto stage = [&](int firstId, int lastId, int pivotId, float wRoll, float wPitch) {
+                        float* pb = bone(pivotId); if (!pb) return;
+                        float piv[3] = { pb[12], pb[13], pb[14] };
+                        for (int id = firstId; id <= lastId; ++id)
                         {
-                            float* b = arr + hi * 16;
-                            float hr = -g_Roll * g_HeadLean * D2R, hp = -g_PitchDeg * g_PitchSign * g_HeadPitch * D2R;
-                            float* vs[3] = { b, b + 4, b + 8 };          // rotate about the head's own position
-                            for (float* v : vs) { RotAxis(fax, hr, v); RotAxis(rax, hp, v); }
+                            float* b = bone(id); if (!b) continue;
+                            float rel[3] = { b[12]-piv[0], b[13]-piv[1], b[14]-piv[2] };
+                            float* vs[4] = { b, b + 4, b + 8, rel };
+                            for (float* v : vs) { RotAxis(fax, roll * wRoll, v); RotAxis(rax, pitch * wPitch, v); }
+                            b[12] = piv[0]+rel[0]; b[13] = piv[1]+rel[1]; b[14] = piv[2]+rel[2];
                         }
-                    }
+                    };
+                    float hr = g_Head ? g_HeadLean : 0.0f, hp = g_Head ? g_HeadPitch : 0.0f;
+                    stage(3, 40, 2, 0.40f, 0.40f);              // spine and everything above bends about the pelvis
+                    stage(4, 40, 3, 0.35f, 0.35f);              // chest, shoulders and arms bend about the spine
+                    stage(5, 8, 5, 0.25f + hr, 0.25f + hp);     // neck and head follow
                 }
             }
         }
