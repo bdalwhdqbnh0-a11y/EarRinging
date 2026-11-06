@@ -104,6 +104,7 @@ template <class T> static bool Install(const char* sym, void* hook, T* orig)
 static int   g_Camera   = 1;      // shoulder camera on/off
 static float g_OffX     = 0.45f;  // + = right shoulder, - = left shoulder
 static float g_OffY     = 0.15f;  // + = up
+static float g_ZoomIn = 0.0f;    // + = camera closer to the player (along its view direction)
 static float g_Response = 8.0f;   // how fast the camera slides to the offset
 static int   g_Collide  = 1;      // keep the offset camera out of walls
 static float g_Padding  = 0.12f;
@@ -115,6 +116,8 @@ static float g_AccWalk = 1.3f, g_AccRun = 1.6f, g_Braking = 4.1f, g_RevBraking =
 static float g_RevAngle = 115.0f, g_RevSwitch = 0.12f;
 // lean
 static int   g_Lean = 1;
+static int g_Pitch = 1, g_Head = 1;
+static float g_PitchAcc = 10.0f, g_PitchBrk = 7.0f, g_PitchResp = 7.0f, g_PitchSign = 1.0f, g_HeadLean = 0.35f, g_HeadPitch = 0.30f;
 static float g_LeanMax = 10.0f, g_LeanIn = 5.5f, g_LeanOut = 5.0f, g_FullTurn = 120.0f, g_LeanSign = 1.0f;
 
 static void LoadIni()
@@ -130,7 +133,9 @@ static void LoadIni()
                        "[Camera]\nEnable=1\n; +right shoulder, -left shoulder\nOffsetX=0.45\n; +up\nOffsetY=0.15\nResponse=8.0\n"
                        "Collision=1\nCollisionPadding=0.12\n[CameraShake]\nIntensity=1.25\n"
                        "[Momentum]\nEnable=1\nInputDeadZone=0.08\nStopEpsilon=0.015\nWalkAcceleration=1.3\nRunAcceleration=1.6\nBraking=4.1\nReversalBraking=3.2\nReversalAngleDegrees=115\nReversalSwitchSpeed=0.12\n"
-                       "[Lean]\nEnable=1\nMaxLeanDegrees=10\nLeanInResponse=5.5\nLeanOutResponse=5.0\nFullTiltTurnSpeedDegreesPerSecond=120\n; set LeanSign=-1 if the body leans OUT of turns\nLeanSign=1\n");
+                       "[Lean]\nEnable=1\nMaxLeanDegrees=10\nLeanInResponse=5.5\nLeanOutResponse=5.0\nFullTiltTurnSpeedDegreesPerSecond=120\n; set LeanSign=-1 if the body leans OUT of turns\nLeanSign=1\n"
+                       "[Pitch]\nEnable=1\nMaxAccelerationPitchDegrees=10\nMaxBrakingPitchDegrees=7\nPitchResponse=7\n; set PitchSign=-1 if the body leans BACK when speeding up\nPitchSign=1\n"
+                       "[HeadFollow]\nEnable=1\nLeanInfluence=0.35\nPitchInfluence=0.30\n");
             fclose(f);
         }
         return;
@@ -142,7 +147,7 @@ static void LoadIni()
         char* eq = strchr(line, '=');
         if (!eq || line[0] == ';') continue;
         *eq = 0; const char* k = line; float v = (float)atof(eq + 1);
-        if (!strcasecmp(k, "Enable")) { if (!strcasecmp(sec, "Momentum")) g_Momentum = (int)v; else if (!strcasecmp(sec, "Lean")) g_Lean = (int)v; else g_Camera = (int)v; }
+        if (!strcasecmp(k, "Enable")) { if (!strcasecmp(sec, "Momentum")) g_Momentum = (int)v; else if (!strcasecmp(sec, "Lean")) g_Lean = (int)v; else if (!strcasecmp(sec, "Pitch")) g_Pitch = (int)v; else if (!strcasecmp(sec, "HeadFollow")) g_Head = (int)v; else g_Camera = (int)v; }
         else if (!strcasecmp(k, "InputDeadZone"))    g_DeadZone = v;
         else if (!strcasecmp(k, "StopEpsilon"))      g_StopEps = v;
         else if (!strcasecmp(k, "WalkAcceleration")) g_AccWalk = v;
@@ -156,8 +161,15 @@ static void LoadIni()
         else if (!strcasecmp(k, "LeanOutResponse"))  g_LeanOut = v;
         else if (!strcasecmp(k, "FullTiltTurnSpeedDegreesPerSecond")) g_FullTurn = v;
         else if (!strcasecmp(k, "LeanSign"))         g_LeanSign = v;
+        else if (!strcasecmp(k, "MaxAccelerationPitchDegrees")) g_PitchAcc = v;
+        else if (!strcasecmp(k, "MaxBrakingPitchDegrees"))      g_PitchBrk = v;
+        else if (!strcasecmp(k, "PitchResponse"))    g_PitchResp = v;
+        else if (!strcasecmp(k, "PitchSign"))        g_PitchSign = v;
+        else if (!strcasecmp(k, "LeanInfluence"))    g_HeadLean = v;
+        else if (!strcasecmp(k, "PitchInfluence"))   g_HeadPitch = v;
         else if (!strcasecmp(k, "OffsetX"))          g_OffX = v;
         else if (!strcasecmp(k, "OffsetY"))          g_OffY = v;
+        else if (!strcasecmp(k, "ZoomIn"))           g_ZoomIn = v;
         else if (!strcasecmp(k, "Response"))         g_Response = v;
         else if (!strcasecmp(k, "Collision"))        g_Collide = (int)v;
         else if (!strcasecmp(k, "CollisionPadding")) g_Padding = v;
@@ -174,7 +186,7 @@ static uint32_t* g_TimerMs = nullptr;
 static void (*g_FollowOrig)(void*, const void*, float, float, float, bool) = nullptr;
 static void (*g_ShakeOrig)(void*, float, float, float, float) = nullptr;
 
-static float g_Cur[2] = {0, 0};
+static float g_Cur[2] = {0, 0}; static float g_Zoom = 0;
 static uint32_t g_LastMs = 0;
 static bool g_LogOnce = true;
 
@@ -200,8 +212,9 @@ static void FollowPed_hook(void* cam, const void* target, float a, float b, floa
     float k = 1.0f - expf(-g_Response * dt);
     g_Cur[0] += (g_OffX - g_Cur[0]) * k;
     g_Cur[1] += (g_OffY - g_Cur[1]) * k;
+    g_Zoom += (g_ZoomIn - g_Zoom) * k;
 
-    float off[3] = { R[0]*g_Cur[0] + U[0]*g_Cur[1], R[1]*g_Cur[0] + U[1]*g_Cur[1], R[2]*g_Cur[0] + U[2]*g_Cur[1] };
+    float off[3] = { R[0]*g_Cur[0] + U[0]*g_Cur[1] + F[0]*g_Zoom, R[1]*g_Cur[0] + U[1]*g_Cur[1] + F[1]*g_Zoom, R[2]*g_Cur[0] + U[2]*g_Cur[1] + F[2]*g_Zoom };
     float len = sqrtf(off[0]*off[0] + off[1]*off[1] + off[2]*off[2]);
     float scale = 1.0f;
     if (g_Collide && g_LOS && len > 1e-3f)
@@ -286,13 +299,22 @@ typedef void* (*FrameUpdateObjects_t)(void*);
 static FindPlayerPed_t g_FindPlayerPed = nullptr;
 static FindPlayerVehicle_t g_FindPlayerVeh = nullptr;
 static FrameUpdateObjects_t g_FrameUpdate = nullptr;
-static float g_Roll = 0, g_Omega = 0, g_PrevHead = 0;
+static float g_Roll = 0, g_Omega = 0, g_PrevHead = 0, g_PitchDeg = 0, g_PrevSpeed = 0;
 static bool  g_HaveHead = false;
 static uint32_t g_LeanMs = 0;
 
 static void (*g_UpdateAnimOrig)(void*) = nullptr;
 static int g_LeanLog = 0;
-static bool g_TiltOn = false; static float g_TiltAxis[3], g_TiltPiv[3];
+static bool g_TiltOn = false; static float g_TiltAxis[3], g_TiltPiv[3], g_RightAxis[3];
+typedef int (*IdIndex_t)(void*, int);
+static IdIndex_t g_IdIdx = nullptr;
+static void RotAxis(const float* ax, float ang, float* v)
+{
+    float c = cosf(ang), s = sinf(ang);
+    float d = ax[0]*v[0] + ax[1]*v[1] + ax[2]*v[2];
+    float cr[3] = { ax[1]*v[2]-ax[2]*v[1], ax[2]*v[0]-ax[0]*v[2], ax[0]*v[1]-ax[1]*v[0] };
+    for (int i = 0; i < 3; ++i) v[i] = v[i]*c + cr[i]*s + ax[i]*d*(1-c);
+}
 typedef void* (*GetHier_t)(void*);
 static GetHier_t g_GetHier = nullptr;
 
@@ -326,16 +348,22 @@ static void UpdateRpHAnim_hook(void* ent)
                     float tgt = inCar ? 0.0f : g_LeanMax * fmaxf(-1.0f, fminf(1.0f, g_Omega / g_FullTurn)) * sf * g_LeanSign;
                     float rate = fabsf(tgt) > fabsf(g_Roll) ? g_LeanIn : g_LeanOut;
                     g_Roll += (tgt - g_Roll) * (1.0f - expf(-rate * dt));
+                    {   // forward lean when speeding up, backward when braking
+                        float acc = (g_Speed - g_PrevSpeed) / dt;
+                        float pt = 0;
+                        if (!inCar && g_Pitch) pt = acc >= 0 ? g_PitchAcc * fminf(1.0f, acc / 1.5f) : -g_PitchBrk * fminf(1.0f, -acc / 3.0f);
+                        g_PitchDeg += (pt - g_PitchDeg) * (1.0f - expf(-g_PitchResp * dt));
+                    }
                     if (g_LeanLog < 40 && fabsf(g_Roll) > 0.5f) { LOGI("lean roll=%.2f omega=%.1f speed=%.2f", g_Roll, g_Omega, g_Speed); g_LeanLog++; }
                 }
-                g_PrevHead = head; g_HaveHead = true;
+                g_PrevHead = head; g_HaveHead = true; g_PrevSpeed = g_Speed;
             }
-            if (inCar || fabsf(g_Roll) < 0.05f) m = nullptr;
+            if (inCar || (fabsf(g_Roll) < 0.05f && fabsf(g_PitchDeg) < 0.05f)) m = nullptr;
             else
             {
                 // remember the tilt axis/pivot (ped frame is NOT changed; we tilt the finished bone matrices below)
                 g_TiltOn = true;
-                g_TiltAxis[0] = m[8]; g_TiltAxis[1] = m[9]; g_TiltAxis[2] = m[10];
+                g_TiltAxis[0] = m[8]; g_TiltAxis[1] = m[9]; g_TiltAxis[2] = m[10]; g_RightAxis[0] = m[0]; g_RightAxis[1] = m[1]; g_RightAxis[2] = m[2];
                 g_TiltPiv[0] = m[12] - m[4]*0.95f; g_TiltPiv[1] = m[13] - m[5]*0.95f; g_TiltPiv[2] = m[14] - m[6]*0.95f;
             }
         }
@@ -354,21 +382,30 @@ static void UpdateRpHAnim_hook(void* ent)
                 float* arr = *(float**)(h + 8);
                 if (arr && n > 0 && n < 80)
                 {
-                    float a = -g_Roll * 3.14159265f / 180.0f;
-                    float c = cosf(a), s = sinf(a);
-                    const float* f = g_TiltAxis;
-                    auto rot = [&](float* v) {
-                        float dotv = f[0]*v[0] + f[1]*v[1] + f[2]*v[2];
-                        float cr[3] = { f[1]*v[2]-f[2]*v[1], f[2]*v[0]-f[0]*v[2], f[0]*v[1]-f[1]*v[0] };
-                        for (int i = 0; i < 3; ++i) v[i] = v[i]*c + cr[i]*s + f[i]*dotv*(1-c);
-                    };
+                    const float D2R = 3.14159265f / 180.0f;
+                    float ar = -g_Roll * D2R;                          // roll about forward axis
+                    float ap = -g_PitchDeg * g_PitchSign * D2R;        // pitch about right axis (forward lean = positive)
+                    float fax[3] = { g_TiltAxis[0], g_TiltAxis[1], g_TiltAxis[2] };
+                    float rax[3] = { g_RightAxis[0], g_RightAxis[1], g_RightAxis[2] };
+                    RotAxis(fax, ar, rax);                              // right axis after the roll
                     for (int i = 0; i < n; ++i)
                     {
                         float* b = arr + i * 16;                      // RwMatrix: right, up, at, pos (4 floats each)
-                        rot(b); rot(b + 4); rot(b + 8);
                         float rel[3] = { b[12]-g_TiltPiv[0], b[13]-g_TiltPiv[1], b[14]-g_TiltPiv[2] };
-                        rot(rel);
+                        float* vs[4] = { b, b + 4, b + 8, rel };
+                        for (float* v : vs) { RotAxis(fax, ar, v); RotAxis(rax, ap, v); }
                         b[12] = g_TiltPiv[0]+rel[0]; b[13] = g_TiltPiv[1]+rel[1]; b[14] = g_TiltPiv[2]+rel[2];
+                    }
+                    if (g_Head && g_IdIdx)
+                    {
+                        int hi = g_IdIdx(h, 6);                          // 6 = head bone id
+                        if (hi >= 0 && hi < n)
+                        {
+                            float* b = arr + hi * 16;
+                            float hr = -g_Roll * g_HeadLean * D2R, hp = -g_PitchDeg * g_PitchSign * g_HeadPitch * D2R;
+                            float* vs[3] = { b, b + 4, b + 8 };          // rotate about the head's own position
+                            for (float* v : vs) { RotAxis(fax, hr, v); RotAxis(rax, hp, v); }
+                        }
                     }
                 }
             }
@@ -392,6 +429,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     Install("_ZN4CCam20Process_FollowPed_SAERK7CVectorfffb", (void*)FollowPed_hook, &g_FollowOrig);
     g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
     g_FindPlayerVeh = (FindPlayerVehicle_t)ResolveExact("_Z17FindPlayerVehicleib");
+    g_IdIdx         = (IdIndex_t)ResolveExact("_Z17RpHAnimIDGetIndexP16RpHAnimHierarchyi");
     g_GetHier       = (GetHier_t)ResolveExact("_Z29GetAnimHierarchyFromSkinClumpP7RpClump");
     g_FrameUpdate   = (FrameUpdateObjects_t)ResolveExact("_Z20RwFrameUpdateObjectsP7RwFrame");
     LOGI("Momentum=%d Lean=%d FindPlayerPed=%p FrameUpdate=%p", g_Momentum, g_Lean, (void*)g_FindPlayerPed, (void*)g_FrameUpdate);
