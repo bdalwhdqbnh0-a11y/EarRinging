@@ -286,18 +286,22 @@ typedef void* (*FrameUpdateObjects_t)(void*);
 static FindPlayerPed_t g_FindPlayerPed = nullptr;
 static FindPlayerVehicle_t g_FindPlayerVeh = nullptr;
 static FrameUpdateObjects_t g_FrameUpdate = nullptr;
-static void (*g_PedRenderOrig)(void*) = nullptr;
 static float g_Roll = 0, g_Omega = 0, g_PrevHead = 0;
 static bool  g_HaveHead = false;
 static uint32_t g_LeanMs = 0;
 
-static void PedRender_hook(void* ped)
+static void (*g_UpdateAnimOrig)(void*) = nullptr;
+static int g_LeanLog = 0;
+
+// CEntity::UpdateRpHAnim builds the skeleton (bone matrices) from the root frame, so the tilt must be
+// applied to the root frame just around this call.
+static void UpdateRpHAnim_hook(void* ent)
 {
-    float* m = nullptr; float saved[16];
-    if (g_Lean && g_FindPlayerPed && g_FrameUpdate && ped == g_FindPlayerPed(0))
+    float* m = nullptr; float saved[16]; void* frame = nullptr;
+    if (g_Lean && g_FindPlayerPed && g_FrameUpdate && ent == g_FindPlayerPed(0))
     {
-        void* clump = *(void**)((uint8_t*)ped + 0x20);
-        void* frame = clump ? *(void**)((uint8_t*)clump + 8) : nullptr;
+        void* clump = *(void**)((uint8_t*)ent + 0x20);
+        frame = clump ? *(void**)((uint8_t*)clump + 8) : nullptr;
         bool inCar = g_FindPlayerVeh && g_FindPlayerVeh(0, false) != nullptr;
         if (frame)
         {
@@ -308,46 +312,43 @@ static void PedRender_hook(void* ped)
             {
                 float dt = (now - g_LeanMs) * 0.001f;
                 g_LeanMs = now;
-                float head = atan2f(m[9], m[8]);                     // heading from the "at" axis
+                float head = atan2f(m[9], m[8]);
                 if (g_HaveHead && dt > 0 && dt < 0.25f)
                 {
                     float d = head - g_PrevHead;
                     while (d >  3.14159265f) d -= 6.2831853f;
                     while (d < -3.14159265f) d += 6.2831853f;
-                    float om = d / dt * 57.29578f;                   // deg/s, + = turning left
+                    float om = d / dt * 57.29578f;
                     g_Omega += (om - g_Omega) * (1.0f - expf(-14.0f * dt));
                     float sf = fminf(1.0f, g_Speed * 1.5f);
                     float tgt = inCar ? 0.0f : g_LeanMax * fmaxf(-1.0f, fminf(1.0f, g_Omega / g_FullTurn)) * sf * g_LeanSign;
                     float rate = fabsf(tgt) > fabsf(g_Roll) ? g_LeanIn : g_LeanOut;
                     g_Roll += (tgt - g_Roll) * (1.0f - expf(-rate * dt));
+                    if (g_LeanLog < 40 && fabsf(g_Roll) > 0.5f) { LOGI("lean roll=%.2f omega=%.1f speed=%.2f", g_Roll, g_Omega, g_Speed); g_LeanLog++; }
                 }
                 g_PrevHead = head; g_HaveHead = true;
             }
             if (inCar || fabsf(g_Roll) < 0.05f) m = nullptr;
             else
             {
-                // rotate the body about its forward axis, pivoting at the feet (origin is ~0.95 above them)
-                float a = -g_Roll * 3.14159265f / 180.0f;            // tilt toward the inside of the turn
+                float a = -g_Roll * 3.14159265f / 180.0f;
                 float f[3] = { m[8], m[9], m[10] };
                 float c = cosf(a), s = sinf(a);
-                auto rot = [&](float* v) {                            // Rodrigues, axis f (unit)
+                auto rot = [&](float* v) {
                     float dotv = f[0]*v[0] + f[1]*v[1] + f[2]*v[2];
                     float cr[3] = { f[1]*v[2]-f[2]*v[1], f[2]*v[0]-f[0]*v[2], f[0]*v[1]-f[1]*v[0] };
                     for (int i = 0; i < 3; ++i) v[i] = v[i]*c + cr[i]*s + f[i]*dotv*(1-c);
                 };
-                float up0[3] = { m[4], m[5], m[6] };
                 float piv[3] = { m[12] - m[4]*0.95f, m[13] - m[5]*0.95f, m[14] - m[6]*0.95f };
                 float rel[3] = { m[12]-piv[0], m[13]-piv[1], m[14]-piv[2] };
-                (void)up0;
                 rot(&m[0]); rot(&m[4]); rot(rel);
                 m[12] = piv[0]+rel[0]; m[13] = piv[1]+rel[1]; m[14] = piv[2]+rel[2];
                 g_FrameUpdate(frame);
             }
         }
-        else m = nullptr;
     }
-    g_PedRenderOrig(ped);
-    if (m) { memcpy(m, saved, sizeof(saved)); /* restore */ void* clump = *(void**)((uint8_t*)ped + 0x20); void* frame = *(void**)((uint8_t*)clump + 8); g_FrameUpdate(frame); }
+    g_UpdateAnimOrig(ent);
+    if (m) { memcpy(m, saved, sizeof(saved)); g_FrameUpdate(frame); }
 }
 
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
@@ -370,6 +371,6 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     LOGI("Momentum=%d Lean=%d FindPlayerPed=%p FrameUpdate=%p", g_Momentum, g_Lean, (void*)g_FindPlayerPed, (void*)g_FrameUpdate);
     Install("_ZN4CPad19GetPedWalkLeftRightEv", (void*)LR_hook, &g_LROrig);
     Install("_ZN4CPad16GetPedWalkUpDownEv", (void*)UD_hook, &g_UDOrig);
-    Install("_ZN4CPed6RenderEv", (void*)PedRender_hook, &g_PedRenderOrig);
+    Install("_ZN7CEntity13UpdateRpHAnimEv", (void*)UpdateRpHAnim_hook, &g_UpdateAnimOrig);
     Install("_ZN7CCamera8CamShakeEffff", (void*)CamShake_hook, &g_ShakeOrig);
 }
