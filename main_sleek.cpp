@@ -116,6 +116,7 @@ static float g_AccWalk = 1.3f, g_AccRun = 1.6f, g_Braking = 4.1f, g_RevBraking =
 static float g_RevAngle = 115.0f, g_RevSwitch = 0.12f;
 // lean
 static int   g_Lean = 1;
+static float g_TurnMem = 0.45f, g_FullAngle = 42.0f;
 static int g_Pitch = 1, g_Head = 1;
 static float g_PitchAcc = 10.0f, g_PitchBrk = 7.0f, g_PitchResp = 7.0f, g_PitchSign = 1.0f, g_HeadLean = 0.35f, g_HeadPitch = 0.30f;
 static float g_LeanMax = 10.0f, g_LeanIn = 5.5f, g_LeanOut = 5.0f, g_FullTurn = 120.0f, g_LeanSign = 1.0f;
@@ -160,6 +161,8 @@ static void LoadIni()
         else if (!strcasecmp(k, "LeanInResponse"))   g_LeanIn = v;
         else if (!strcasecmp(k, "LeanOutResponse"))  g_LeanOut = v;
         else if (!strcasecmp(k, "FullTiltTurnSpeedDegreesPerSecond")) g_FullTurn = v;
+        else if (!strcasecmp(k, "TurnMemorySeconds")) g_TurnMem = v;
+        else if (!strcasecmp(k, "FullTurnAngleDegrees")) g_FullAngle = v;
         else if (!strcasecmp(k, "LeanSign"))         g_LeanSign = v;
         else if (!strcasecmp(k, "MaxAccelerationPitchDegrees")) g_PitchAcc = v;
         else if (!strcasecmp(k, "MaxBrakingPitchDegrees"))      g_PitchBrk = v;
@@ -299,6 +302,7 @@ typedef void* (*FrameUpdateObjects_t)(void*);
 static FindPlayerPed_t g_FindPlayerPed = nullptr;
 static FindPlayerVehicle_t g_FindPlayerVeh = nullptr;
 static FrameUpdateObjects_t g_FrameUpdate = nullptr;
+static float g_TurnAcc = 0;
 static float g_Roll = 0, g_Omega = 0, g_PrevHead = 0, g_PitchDeg = 0, g_PrevSpeed = 0;
 static bool  g_HaveHead = false;
 static uint32_t g_LeanMs = 0;
@@ -345,7 +349,8 @@ static void UpdateRpHAnim_hook(void* ent)
                     float om = d / dt * 57.29578f;
                     g_Omega += (om - g_Omega) * (1.0f - expf(-14.0f * dt));
                     float sf = fminf(1.0f, g_Speed * 1.5f);
-                    float tgt = inCar ? 0.0f : g_LeanMax * fmaxf(-1.0f, fminf(1.0f, g_Omega / g_FullTurn)) * sf * g_LeanSign;
+                    g_TurnAcc = g_TurnAcc * expf(-dt / fmaxf(0.05f, g_TurnMem)) + d * 57.29578f;   // remembered recent turning (deg)
+                    float tgt = inCar ? 0.0f : g_LeanMax * fmaxf(-1.0f, fminf(1.0f, g_TurnAcc / g_FullAngle)) * sf * g_LeanSign;
                     float rate = fabsf(tgt) > fabsf(g_Roll) ? g_LeanIn : g_LeanOut;
                     g_Roll += (tgt - g_Roll) * (1.0f - expf(-rate * dt));
                     {   // forward lean when speeding up, backward when braking
