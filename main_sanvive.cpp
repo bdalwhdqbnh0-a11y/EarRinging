@@ -218,6 +218,12 @@ static void LoadConfig()
         else if (!strncmp(k, "MagDrop", 7) && k[7] >= '0' && k[7] <= '9') { int t = atoi(k + 7); if (t >= 0 && t < 64) g_MagDropT[t] = (float)atof(v); }
         else if (!strcmp(k, "SlowTypes")) { g_SlowTypes.clear(); const char* q = v; while (*q) { g_SlowTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
         else if (!strcmp(k, "BoltAt")) g_BoltAt = (float)atof(v);
+        else if (!strcmp(k, "FireBoltStart")) g_FireBoltStart = (float)atof(v);
+        else if (!strcmp(k, "FireBoltHold"))  g_FireBoltHold  = (float)atof(v);
+        else if (!strcmp(k, "FireBoltEnd"))   g_FireBoltEnd   = (float)atof(v);
+        else if (!strcmp(k, "ReloadBoltStart")) g_ReloadBoltStart = (float)atof(v);
+        else if (!strcmp(k, "ReloadBoltHold"))  g_ReloadBoltHold  = (float)atof(v);
+        else if (!strcmp(k, "ReloadBoltEnd"))   g_ReloadBoltEnd   = (float)atof(v);
         else if (!strcmp(k, "AkGroupPoor")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroupPoor = t[0]; }
     }
     fclose(f);
