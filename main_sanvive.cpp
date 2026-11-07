@@ -802,7 +802,9 @@ static void PedRender_hook(void* ped)
             const uint8_t* wp = (const uint8_t*)ped + 0x730 + slot * 32;
             int type = *(const int*)wp, state = *(const int*)(wp + 4);
             {
-                if (g_P.clump != clump)
+                static int s_lastType = -1; static void* s_lastClump = nullptr;
+                if (s_lastType != type || s_lastClump != clump) LOGI("weapon in hand: type %d state %d slot %d clump %p", type, state, (int)slot, clump);
+                if (g_P.clump != clump || s_lastType != type)         // a new weapon can reuse the old clump's address, so the type counts too
                 {
                     g_P = Parts(); g_P.clump = clump;
                     g_P.root = *(void**)((uint8_t*)clump + 8);   // RwObject::parent = RwFrame*
@@ -810,6 +812,7 @@ static void PedRender_hook(void* ped)
                     { FindHand fh; void* pc = *(void**)((uint8_t*)ped + 0x20); void* pr = pc ? *(void**)((uint8_t*)pc + 8) : nullptr; FindHandIn(pr, &fh); g_P.lhand = fh.res; }
                     LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand);
                 }
+                s_lastType = type; s_lastClump = clump;
                 if (g_P.mag || g_P.bolt)                         // any weapon whose model has a "magazine" or "bolt" part
                 {
                     bool slow = false; for (int t : g_SlowTypes) if (t == type) slow = true;
