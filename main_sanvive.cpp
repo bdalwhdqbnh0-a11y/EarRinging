@@ -489,7 +489,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     static bool simDone = true; static uint32_t landT = 0; static bool landed = false; static float xyOff = 0; static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
     uint32_t now = g_TimerMs ? *g_TimerMs : 0;
     int clip = *(const int*)(wp + 8);
-    if (lastClip >= 0 && clip < lastClip && state != 2) shotTime = now;           // a bullet was fired
+    if (lastClip >= 0 && clip < lastClip && state != 2) { shotTime = now; static int sl = 0; if (sl++ < 12) LOGI("shot detected (clip %d -> %d) bolt=%p travel=%.3f", lastClip, clip, g_P.bolt, (g_BoltBackCur != 0.f ? g_BoltBackCur : g_BoltBack)); }           // a bullet was fired
     lastClip = clip;
     if (state == 2) lastIn2 = now;
     if (state == 2 && !reloadActive)
@@ -652,6 +652,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     {
         float bb = (g_BoltBackCur != 0.f ? g_BoltBackCur : g_BoltBack) * bolt;
         float pos[3] = { g_P.boltP[0] + g_P.boltR[0] * bb, g_P.boltP[1] + g_P.boltR[1] * bb, g_P.boltP[2] + g_P.boltR[2] * bb };   // along the slide's own axis
+        { static int bl = 0; if (bolt > 0.01f && bl++ < 12) LOGI("bolt moved: amount %.2f offset %.3f", bolt, bb); }
         SetFrame(g_P.bolt, g_P.boltR, pos);
     }
 }
