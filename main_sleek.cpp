@@ -116,6 +116,7 @@ static float g_AccWalk = 1.3f, g_AccRun = 1.6f, g_Braking = 4.1f, g_RevBraking =
 static float g_RevAngle = 115.0f, g_RevSwitch = 0.12f;
 // lean
 static int   g_Lean = 1;
+static float g_TwistMax = 25.0f, g_TwistSign = 1.0f, g_Twist = 0;
 static float g_TurnMem = 0.45f, g_FullAngle = 42.0f;
 static int g_Pitch = 1, g_Head = 1;
 static float g_PitchAcc = 10.0f, g_PitchBrk = 7.0f, g_PitchResp = 7.0f, g_PitchSign = 1.0f, g_HeadLean = 0.35f, g_HeadPitch = 0.30f;
@@ -161,6 +162,8 @@ static void LoadIni()
         else if (!strcasecmp(k, "LeanInResponse"))   g_LeanIn = v;
         else if (!strcasecmp(k, "LeanOutResponse"))  g_LeanOut = v;
         else if (!strcasecmp(k, "FullTiltTurnSpeedDegreesPerSecond")) g_FullTurn = v;
+        else if (!strcasecmp(k, "TwistMaxDegrees"))  g_TwistMax = v;
+        else if (!strcasecmp(k, "TwistSign"))        g_TwistSign = v;
         else if (!strcasecmp(k, "TurnMemorySeconds")) g_TurnMem = v;
         else if (!strcasecmp(k, "FullTurnAngleDegrees")) g_FullAngle = v;
         else if (!strcasecmp(k, "LeanSign"))         g_LeanSign = v;
@@ -309,7 +312,7 @@ static uint32_t g_LeanMs = 0;
 
 static void (*g_UpdateAnimOrig)(void*) = nullptr;
 static int g_LeanLog = 0;
-static bool g_TiltOn = false; static float g_TiltAxis[3], g_TiltPiv[3], g_RightAxis[3];
+static bool g_TiltOn = false; static float g_TiltAxis[3], g_TiltPiv[3], g_RightAxis[3], g_UpAxis[3];
 typedef int (*IdIndex_t)(void*, int);
 static IdIndex_t g_IdIdx = nullptr;
 static void RotAxis(const float* ax, float ang, float* v)
@@ -353,6 +356,10 @@ static void UpdateRpHAnim_hook(void* ent)
                     float tgt = inCar ? 0.0f : g_LeanMax * fmaxf(-1.0f, fminf(1.0f, g_TurnAcc / g_FullAngle)) * sf * g_LeanSign;
                     float rate = fabsf(tgt) > fabsf(g_Roll) ? g_LeanIn : g_LeanOut;
                     g_Roll += (tgt - g_Roll) * (1.0f - expf(-rate * dt));
+                    {   // upper-body twist toward the turn (torso leads, legs stay)
+                        float tt = inCar ? 0.0f : g_TwistMax * fmaxf(-1.0f, fminf(1.0f, g_TurnAcc / g_FullAngle)) * sf * g_TwistSign;
+                        g_Twist += (tt - g_Twist) * (1.0f - expf(-(fabsf(tt) > fabsf(g_Twist) ? g_LeanIn : g_LeanOut) * dt));
+                    }
                     {   // forward lean when speeding up, backward when braking
                         float acc = (g_Speed - g_PrevSpeed) / dt;
                         float pt = 0;
@@ -363,12 +370,12 @@ static void UpdateRpHAnim_hook(void* ent)
                 }
                 g_PrevHead = head; g_HaveHead = true; g_PrevSpeed = g_Speed;
             }
-            if (inCar || (fabsf(g_Roll) < 0.05f && fabsf(g_PitchDeg) < 0.05f)) m = nullptr;
+            if (inCar || (fabsf(g_Roll) < 0.05f && fabsf(g_PitchDeg) < 0.05f && fabsf(g_Twist) < 0.05f)) m = nullptr;
             else
             {
                 // remember the tilt axis/pivot (ped frame is NOT changed; we tilt the finished bone matrices below)
                 g_TiltOn = true;
-                g_TiltAxis[0] = m[8]; g_TiltAxis[1] = m[9]; g_TiltAxis[2] = m[10]; g_RightAxis[0] = m[0]; g_RightAxis[1] = m[1]; g_RightAxis[2] = m[2];
+                g_TiltAxis[0] = m[8]; g_TiltAxis[1] = m[9]; g_TiltAxis[2] = m[10]; g_RightAxis[0] = m[0]; g_RightAxis[1] = m[1]; g_RightAxis[2] = m[2]; g_UpAxis[0] = m[4]; g_UpAxis[1] = m[5]; g_UpAxis[2] = m[6];
                 g_TiltPiv[0] = m[12] - m[4]*0.95f; g_TiltPiv[1] = m[13] - m[5]*0.95f; g_TiltPiv[2] = m[14] - m[6]*0.95f;
             }
         }
@@ -390,12 +397,14 @@ static void UpdateRpHAnim_hook(void* ent)
                     const float D2R = 3.14159265f / 180.0f;
                     float fax[3] = { g_TiltAxis[0], g_TiltAxis[1], g_TiltAxis[2] };
                     float rax[3] = { g_RightAxis[0], g_RightAxis[1], g_RightAxis[2] };
+                    float uax[3] = { g_UpAxis[0], g_UpAxis[1], g_UpAxis[2] };
+                    float twist = g_Twist * D2R;
                     float roll = -g_Roll * D2R, pitch = -g_PitchDeg * g_PitchSign * D2R;
                     // bone ids (SA): 2 pelvis, 3 spine, 4 chest, 5 neck, 6-8 head, 21-40 shoulders/arms/hands
                     int idx[48]; for (int id = 0; id < 48; ++id) idx[id] = (id >= 2 && id <= 40) ? g_IdIdx(h, id) : -1;
                     auto bone = [&](int id) -> float* { return (id >= 0 && id < 48 && idx[id] >= 0 && idx[id] < n) ? arr + idx[id] * 16 : nullptr; };
                     // bend the upper body in stages: spine, then chest (with shoulders/arms), then neck+head
-                    auto stage = [&](int firstId, int lastId, int pivotId, float wRoll, float wPitch) {
+                    auto stage = [&](int firstId, int lastId, int pivotId, float wRoll, float wPitch, float wTwist) {
                         float* pb = bone(pivotId); if (!pb) return;
                         float piv[3] = { pb[12], pb[13], pb[14] };
                         for (int id = firstId; id <= lastId; ++id)
@@ -403,14 +412,14 @@ static void UpdateRpHAnim_hook(void* ent)
                             float* b = bone(id); if (!b) continue;
                             float rel[3] = { b[12]-piv[0], b[13]-piv[1], b[14]-piv[2] };
                             float* vs[4] = { b, b + 4, b + 8, rel };
-                            for (float* v : vs) { RotAxis(fax, roll * wRoll, v); RotAxis(rax, pitch * wPitch, v); }
+                            for (float* v : vs) { RotAxis(uax, twist * wTwist, v); RotAxis(fax, roll * wRoll, v); RotAxis(rax, pitch * wPitch, v); }
                             b[12] = piv[0]+rel[0]; b[13] = piv[1]+rel[1]; b[14] = piv[2]+rel[2];
                         }
                     };
                     float hr = g_Head ? g_HeadLean : 0.0f, hp = g_Head ? g_HeadPitch : 0.0f;
-                    stage(3, 40, 2, 0.40f, 0.40f);              // spine and everything above bends about the pelvis
-                    stage(4, 40, 3, 0.35f, 0.35f);              // chest, shoulders and arms bend about the spine
-                    stage(5, 8, 5, 0.25f + hr, 0.25f + hp);     // neck and head follow
+                    stage(3, 40, 2, 0.40f, 0.40f, 0.30f);             // spine and everything above bends about the pelvis
+                    stage(4, 40, 3, 0.35f, 0.35f, 0.40f);             // chest, shoulders and arms bend about the spine
+                    stage(5, 8, 5, 0.25f + hr, 0.25f + hp, 0.30f);    // neck and head follow
                 }
             }
         }
