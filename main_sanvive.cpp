@@ -132,6 +132,8 @@ static void* g_SceneSym = nullptr; static void* g_FpPed = nullptr;
 static float g_Spin = 7.0f, g_Drift = 0.35f, g_StayMs = 60000.f;
 static float g_HandOff[3] = { 0, 0, 0 };            // magazine position inside the left hand (hand-local axes)                          // radians the magazine tumbles until it lies on the ground
 static float g_BoltBackT[64] = {0}, g_BoltBackCur = 0;   // per-weapon-type bolt travel (ini BoltBack<type>=)
+static std::vector<int> g_LockTypes = { 22, 23, 24 };      // weapons whose slide stays back when the magazine is empty
+static bool g_LockCur = false;
 static float g_EffSpeed = 0.6f; static int g_EffExtend = 1;   // reload slow-down actually used for the weapon in hand
 static std::vector<int> g_SlowTypes = { 22, 23, 24, 28, 29, 30, 31, 32 };           // weapons whose reload anim is the rifle one (226/227) -> slowable
 static float g_BoltBack = -0.074f, g_BoltAt = 0.90f; // bolt travel (m) and reload progress at which it is racked
@@ -216,6 +218,7 @@ static void LoadConfig()
         else if (!strcmp(k, "BoltBack")) g_BoltBack = (float)atof(v);
         else if (!strncmp(k, "BoltBack", 8) && k[8] >= '0' && k[8] <= '9') { int t = atoi(k + 8); if (t >= 0 && t < 64) g_BoltBackT[t] = (float)atof(v); }
         else if (!strncmp(k, "MagDrop", 7) && k[7] >= '0' && k[7] <= '9') { int t = atoi(k + 7); if (t >= 0 && t < 64) g_MagDropT[t] = (float)atof(v); }
+        else if (!strcmp(k, "LockOpenTypes")) { g_LockTypes.clear(); const char* q = v; while (*q) { g_LockTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
         else if (!strcmp(k, "SlowTypes")) { g_SlowTypes.clear(); const char* q = v; while (*q) { g_SlowTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
         else if (!strcmp(k, "BoltAt")) g_BoltAt = (float)atof(v);
         else if (!strcmp(k, "FireBoltStart")) g_FireBoltStart = (float)atof(v);
@@ -492,15 +495,17 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     static bool reloadActive = false, racked = false, dirty = false;
     static float reloadDur = 3000.f, lastGoodDur = 0.f;
     static uint32_t gStart = 0;
+    static int clipBeforeReload = 1; static bool wasEmpty = false;
     static bool simDone = true; static uint32_t landT = 0; static bool landed = false; static float xyOff = 0; static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
     uint32_t now = g_TimerMs ? *g_TimerMs : 0;
     int clip = *(const int*)(wp + 8);
     if (lastClip >= 0 && clip < lastClip && state != 2) { shotTime = now; static int sl = 0; if (sl++ < 12) LOGI("shot detected (clip %d -> %d) bolt=%p travel=%.3f", lastClip, clip, g_P.bolt, (g_BoltBackCur != 0.f ? g_BoltBackCur : g_BoltBack)); }           // a bullet was fired
     lastClip = clip;
+    if (state != 2) clipBeforeReload = clip;
     if (state == 2) lastIn2 = now;
     if (state == 2 && !reloadActive)
     {
-        reloadActive = true; reloadStart = now; released = false; if (g_P.nDrop > 0) { g_Cur = (g_Cur + 1) % g_P.nDrop; g_Slots[g_Cur].valid = false; } racked = false; rackTime = 0;
+        reloadActive = true; reloadStart = now; released = false; if (g_P.nDrop > 0) { g_Cur = (g_Cur + 1) % g_P.nDrop; g_Slots[g_Cur].valid = false; } racked = false; rackTime = 0; wasEmpty = (clipBeforeReload <= 0);
         float d = 0;
         if (g_TimerMs) d = (float)(int)(*(const uint32_t*)(wp + 0x10) - *g_TimerMs);
         if (d >= 300.f && d <= 8000.f) lastGoodDur = d;
@@ -532,7 +537,17 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     if (reloading) { p = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; if (p > 1) p = 1; }
     if (reloading && !racked && p >= g_BoltAt) { racked = true; rackTime = now; }
     float bolt = Profile(shotTime ? (float)(now - shotTime) : 100000.f, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
-    if (rackTime) { float r = Profile((float)(now - rackTime), g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd); if (r > bolt) bolt = r; }
+    if (rackTime)
+    {
+        if (g_LockCur && wasEmpty)                                                  // the slide was locked back: release it forward when the new magazine is in
+        { float t = (float)(now - rackTime); float r = t < g_ReloadBoltStart ? 1.f : (t < g_ReloadBoltStart + g_ReloadBoltEnd ? 1.f - Smooth((t - g_ReloadBoltStart) / g_ReloadBoltEnd) : 0.f); if (r > bolt) bolt = r; }
+        else { float r = Profile((float)(now - rackTime), g_ReloadBoltStart, g_ReloadBoltHold, g_ReloadBoltEnd); if (r > bolt) bolt = r; }
+    }
+    if (g_LockCur)
+    {
+        bool locked = (!reloading && clip <= 0) || (reloading && wasEmpty && !rackTime);   // empty gun, or reloading an empty gun until the rack
+        if (locked) { float t = shotTime ? (float)(now - shotTime) : 100000.f; bolt = fmaxf(bolt, t < g_FireBoltStart ? Smooth(t / g_FireBoltStart) : 1.f); }
+    }
     bool simActive = g_P.drop && released && !simDone;
     bool active = reloading || bolt > 0 || simActive;
     if (!active && !dirty) return;
@@ -824,6 +839,7 @@ static void PedRender_hook(void* ped)
                 {
                     bool slow = false; for (int t : g_SlowTypes) if (t == type) slow = true;
                     g_EffSpeed = slow ? g_ReloadSpeed : 1.0f; g_EffExtend = slow ? g_ExtendReload : 0;
+                    g_LockCur = false; for (int t : g_LockTypes) if (t == type) g_LockCur = true;
                     g_BoltBackCur = (type >= 0 && type < 64) ? g_BoltBackT[type] : 0.f;
                     g_MagDropEff = (type >= 0 && type < 64 && g_MagDropT[type] > 0.f) ? g_MagDropT[type] : g_MagDrop;
                     g_FpPed = ped;
