@@ -134,6 +134,7 @@ static float g_HandOff[3] = { 0, 0, 0 };            // magazine position inside 
 static float g_BoltBackT[64] = {0}, g_BoltBackCur = 0;   // per-weapon-type bolt travel (ini BoltBack<type>=)
 static std::vector<int> g_LockTypes = { 22, 23, 24 };      // weapons whose slide stays back when the magazine is empty
 static bool g_LockCur = false;
+static float g_BoltAtPartial = 0.76f;   // when the old magazine still had rounds, the game ends the reload early, so the slide moves sooner
 static float g_EffSpeed = 0.6f; static int g_EffExtend = 1;   // reload slow-down actually used for the weapon in hand
 static std::vector<int> g_SlowTypes = { 22, 23, 24, 28, 29, 30, 31, 32 };           // weapons whose reload anim is the rifle one (226/227) -> slowable
 static float g_BoltBack = -0.074f, g_BoltAt = 0.90f; // bolt travel (m) and reload progress at which it is racked
@@ -221,6 +222,7 @@ static void LoadConfig()
         else if (!strcmp(k, "LockOpenTypes")) { g_LockTypes.clear(); const char* q = v; while (*q) { g_LockTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
         else if (!strcmp(k, "SlowTypes")) { g_SlowTypes.clear(); const char* q = v; while (*q) { g_SlowTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
         else if (!strcmp(k, "BoltAt")) g_BoltAt = (float)atof(v);
+        else if (!strcmp(k, "BoltAtPartial")) g_BoltAtPartial = (float)atof(v);
         else if (!strcmp(k, "FireBoltStart")) g_FireBoltStart = (float)atof(v);
         else if (!strcmp(k, "FireBoltHold"))  g_FireBoltHold  = (float)atof(v);
         else if (!strcmp(k, "FireBoltEnd"))   g_FireBoltEnd   = (float)atof(v);
@@ -536,7 +538,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     }
     float p = 0;
     if (reloading) { p = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; if (p > 1) p = 1; }
-    if (reloading && !racked && p >= g_BoltAt) { racked = true; rackTime = now; LOGI("slide rack at p=%.2f (reload %.0f ms, wasEmpty=%d)", p, reloadDur, (int)wasEmpty); }
+    if (reloading && !racked && p >= (wasEmpty ? g_BoltAt : fminf(g_BoltAt, g_BoltAtPartial))) { racked = true; rackTime = now; LOGI("slide rack at p=%.2f (reload %.0f ms, wasEmpty=%d)", p, reloadDur, (int)wasEmpty); }
     float bolt = Profile(shotTime ? (float)(now - shotTime) : 100000.f, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
     if (rackTime)
     {
