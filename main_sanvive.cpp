@@ -521,7 +521,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (*tf < want && *tf + 20000 > want) *tf = want;
     }
     if (state != 2) gStart = 0;
-    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; }
+    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; if (!racked) { float pe = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; LOGI("reload ended before the slide rack (p=%.2f, BoltAt=%.2f)", pe, g_BoltAt); } }
     bool reloading = reloadActive;
     if (reloading && g_EffSpeed != 1.f && g_GetAssocId)                          // slow the reload animation down
     {
@@ -536,7 +536,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     }
     float p = 0;
     if (reloading) { p = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; if (p > 1) p = 1; }
-    if (reloading && !racked && p >= g_BoltAt) { racked = true; rackTime = now; }
+    if (reloading && !racked && p >= g_BoltAt) { racked = true; rackTime = now; LOGI("slide rack at p=%.2f (reload %.0f ms, wasEmpty=%d)", p, reloadDur, (int)wasEmpty); }
     float bolt = Profile(shotTime ? (float)(now - shotTime) : 100000.f, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
     if (rackTime)
     {
