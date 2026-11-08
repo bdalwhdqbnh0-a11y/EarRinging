@@ -443,6 +443,7 @@ static PedRender_t g_PedRenderOrig = nullptr;
 
 struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr, *lhand = nullptr, *dropF[8] = {0}; int nDrop = 0; float magP[3] = {0}, boltP[3] = {0}; float magR[9] = {1,0,0,0,1,0,0,0,1}, boltR[9] = {1,0,0,0,1,0,0,0,1}; };
 static Parts g_P;
+static int g_LastType = -1; static void* g_LastClump = nullptr;
 static bool g_FpsOn = false;
 struct DropSlot { bool valid = false; float R[9] = {0}, pos[3] = {0}; uint32_t until = 0; };
 static DropSlot g_Slots[8]; static int g_Cur = -1;
@@ -495,22 +496,22 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     static bool reloadActive = false, racked = false, dirty = false;
     static float reloadDur = 3000.f, lastGoodDur = 0.f;
     static uint32_t gStart = 0;
-    static int clipBeforeReload = 1; static bool wasEmpty = false;
+    static int clipBeforeReload = 1; static bool wasEmpty = false, emptyShot = false;
     static bool simDone = true; static uint32_t landT = 0; static bool landed = false; static float xyOff = 0; static bool released = false; static float W[16], zNow = 0, vz = 0, groundZ = 0; static uint32_t lastT = 0, fallT0 = 0;
     uint32_t now = g_TimerMs ? *g_TimerMs : 0;
     int clip = *(const int*)(wp + 8);
-    if (lastClip >= 0 && clip < lastClip && state != 2) { shotTime = now; static int sl = 0; if (sl++ < 12) LOGI("shot detected (clip %d -> %d) bolt=%p travel=%.3f", lastClip, clip, g_P.bolt, (g_BoltBackCur != 0.f ? g_BoltBackCur : g_BoltBack)); }           // a bullet was fired
+    if (lastClip >= 0 && clip < lastClip && state != 2) { shotTime = now; emptyShot = (clip <= 0); static int sl = 0; if (sl++ < 12) LOGI("shot detected (clip %d -> %d) bolt=%p travel=%.3f", lastClip, clip, g_P.bolt, (g_BoltBackCur != 0.f ? g_BoltBackCur : g_BoltBack)); }           // a bullet was fired
     lastClip = clip;
     if (state != 2) clipBeforeReload = clip;
     if (state == 2) lastIn2 = now;
     if (state == 2 && !reloadActive)
     {
-        reloadActive = true; reloadStart = now; released = false; if (g_P.nDrop > 0) { g_Cur = (g_Cur + 1) % g_P.nDrop; g_Slots[g_Cur].valid = false; } racked = false; rackTime = 0; wasEmpty = (clipBeforeReload <= 0);
+        reloadActive = true; reloadStart = now; released = false; if (g_P.nDrop > 0) { g_Cur = (g_Cur + 1) % g_P.nDrop; g_Slots[g_Cur].valid = false; } racked = false; rackTime = 0; wasEmpty = (clipBeforeReload <= 0) || (clip <= 0) || emptyShot; emptyShot = false;
         float d = 0;
         if (g_TimerMs) d = (float)(int)(*(const uint32_t*)(wp + 0x10) - *g_TimerMs);
         if (d >= 300.f && d <= 8000.f) lastGoodDur = d;
         reloadDur = (lastGoodDur > 0 ? lastGoodDur : g_ReloadMs) / g_EffSpeed;
-        LOGI("reload started, duration %.0f ms (read %.0f)", reloadDur, d);
+        LOGI("reload started, duration %.0f ms (read %.0f) clip %d wasEmpty=%d lock=%d", reloadDur, d, clip, (int)wasEmpty, (int)g_LockCur);
     }
     if (state == 2 && g_TimerMs && g_EffExtend)                                  // keep the reload alive for the whole slowed animation
     {
@@ -819,14 +820,15 @@ static void PedRender_hook(void* ped)
     {
         void* clump = *(void**)((uint8_t*)ped + 0x650);          // CPed::m_pWeaponObject (RpClump*)
         int8_t slot = *(int8_t*)((uint8_t*)ped + 0x8dc);
+        if (!(clump && slot >= 0 && slot < 13)) { if (g_P.clump) { g_P = Parts(); for (auto& sl : g_Slots) sl.valid = false; } g_LastType = -1; g_LastClump = nullptr; }   // weapon gone: drop every pointer into its freed frames
         if (clump && slot >= 0 && slot < 13)
         {
             const uint8_t* wp = (const uint8_t*)ped + 0x730 + slot * 32;
             int type = *(const int*)wp, state = *(const int*)(wp + 4);
             {
-                static int s_lastType = -1; static void* s_lastClump = nullptr;
-                if (s_lastType != type || s_lastClump != clump) LOGI("weapon in hand: type %d state %d slot %d clump %p", type, state, (int)slot, clump);
-                if (g_P.clump != clump || s_lastType != type)         // a new weapon can reuse the old clump's address, so the type counts too
+                void* rootNow = *(void**)((uint8_t*)clump + 8);
+                if (g_LastType != type || g_LastClump != clump || g_P.root != rootNow) LOGI("weapon in hand: type %d state %d slot %d clump %p", type, state, (int)slot, clump);
+                if (g_P.clump != clump || g_LastType != type || g_P.root != rootNow)   // a new weapon can reuse the old clump's address, so type and root frame count too
                 {
                     g_P = Parts(); g_P.clump = clump;
                     g_P.root = *(void**)((uint8_t*)clump + 8);   // RwObject::parent = RwFrame*
@@ -834,7 +836,7 @@ static void PedRender_hook(void* ped)
                     { FindHand fh; void* pc = *(void**)((uint8_t*)ped + 0x20); void* pr = pc ? *(void**)((uint8_t*)pc + 8) : nullptr; FindHandIn(pr, &fh); g_P.lhand = fh.res; }
                     LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand);
                 }
-                s_lastType = type; s_lastClump = clump;
+                g_LastType = type; g_LastClump = clump;
                 if (g_P.mag || g_P.bolt)                         // any weapon whose model has a "magazine" or "bolt" part
                 {
                     bool slow = false; for (int t : g_SlowTypes) if (t == type) slow = true;
