@@ -135,6 +135,7 @@ static float g_BoltDirT[64][3]; static bool g_BoltDirHas[64] = {false}; static c
 static float g_BoltBackT[64] = {0}, g_BoltBackCur = 0;   // per-weapon-type bolt travel (ini BoltBack<type>=)
 static std::vector<int> g_LockTypes = { 22, 23, 24 };      // weapons whose slide stays back when the magazine is empty
 static bool g_LockCur = false;
+static float g_LatchAngle = 25.f;   // sawn-off top lever: swing around its vertical pivot (degrees, + = tail to the right)
 static float g_BarrelAngle = 40.f, g_BarrelOpen1 = 0.08f, g_BarrelOpen2 = 0.20f, g_BarrelClose1 = 0.60f, g_BarrelClose2 = 0.76f;   // break-action shotgun: barrels hinge open during the reload
 static float g_LeverAngle = 30.f, g_HammerAngle = 50.f;   // lever-action rifle: lever / hammer swing (degrees)
 static float g_BoltAtPartial = 0.76f;   // when the old magazine still had rounds, the game ends the reload early, so the slide moves sooner
@@ -227,6 +228,7 @@ static void LoadConfig()
         else if (!strcmp(k, "SlowTypes")) { g_SlowTypes.clear(); const char* q = v; while (*q) { g_SlowTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
         else if (!strcmp(k, "BoltAt")) g_BoltAt = (float)atof(v);
         else if (!strcmp(k, "BoltAtPartial")) g_BoltAtPartial = (float)atof(v);
+        else if (!strcmp(k, "LatchAngle")) g_LatchAngle = (float)atof(v);
         else if (!strcmp(k, "BarrelAngle")) g_BarrelAngle = (float)atof(v);
         else if (!strcmp(k, "BarrelOpen1")) g_BarrelOpen1 = (float)atof(v);
         else if (!strcmp(k, "BarrelOpen2")) g_BarrelOpen2 = (float)atof(v);
@@ -454,7 +456,7 @@ static FindGroundZ_t g_FindGroundZ = nullptr;
 static uint32_t* g_TimerMs = nullptr;
 static PedRender_t g_PedRenderOrig = nullptr;
 
-struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr, *lhand = nullptr, *dropF[8] = {0}; int nDrop = 0; float magP[3] = {0}, boltP[3] = {0}; float magR[9] = {1,0,0,0,1,0,0,0,1}, boltR[9] = {1,0,0,0,1,0,0,0,1}; void* extra[4] = {0}; float extraP[4][3] = {{0}}; float extraR[4][9] = {{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1}}; int extraRole[4] = {0,0,0,0}; int nExtra = 0; void* barrel = nullptr; float barrelP[3] = {0}, barrelR[9] = {1,0,0,0,1,0,0,0,1}; };
+struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr, *lhand = nullptr, *dropF[8] = {0}; int nDrop = 0; float magP[3] = {0}, boltP[3] = {0}; float magR[9] = {1,0,0,0,1,0,0,0,1}, boltR[9] = {1,0,0,0,1,0,0,0,1}; void* extra[4] = {0}; float extraP[4][3] = {{0}}; float extraR[4][9] = {{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1}}; int extraRole[4] = {0,0,0,0}; int nExtra = 0; void* barrel = nullptr; float barrelP[3] = {0}, barrelR[9] = {1,0,0,0,1,0,0,0,1}; void* latch = nullptr; float latchP[3] = {0}; };
 static Parts g_P;
 static int g_LastType = -1; static void* g_LastClump = nullptr;
 static bool g_FpsOn = false;
@@ -473,6 +475,7 @@ static void CollectFrame(void* f, Parts* p)
         if (!strncmp(nm, "magdrop", 7) && p->nDrop < 8) { p->dropF[p->nDrop++] = f; if (!p->drop) p->drop = f; }
         if ((!strcmp(nm, "pump_semiauto") || !strcmp(nm, "charging_handle") || !strcmp(nm, "cocking_handle") || !strcmp(nm, "bolt_cover") || !strcmp(nm, "pump") || !strcmp(nm, "thingy")) && p->nExtra < 4)   // extra parts that ride with the bolt (top cover / cocking handle)
         { int k = p->nExtra++; p->extraRole[k] = (!strcmp(nm, "pump") && m[12] > 0.15f) ? 1 : (!strcmp(nm, "pump") && fabsf(m[12]) > 0.01f) ? 2 : 0; p->extra[k] = f; memcpy(p->extraP[k], m + 12, 12); memcpy(p->extraR[k], m, 12); memcpy(p->extraR[k] + 3, m + 4, 12); memcpy(p->extraR[k] + 6, m + 8, 12); }
+        if (!p->latch && !strcmp(nm, "latch")) { p->latch = f; memcpy(p->latchP, m + 12, 12); }
         if (!p->barrel && !strcmp(nm, "barrel")) { p->barrel = f; memcpy(p->barrelP, m + 12, 12); memcpy(p->barrelR, m, 12); memcpy(p->barrelR + 3, m + 4, 12); memcpy(p->barrelR + 6, m + 8, 12); }
         if (!p->bolt && !strcmp(nm, "bolt"))     { p->bolt = f; memcpy(p->boltP, m + 12, 12); memcpy(p->boltR, m, 12); memcpy(p->boltR + 3, m + 4, 12); memcpy(p->boltR + 6, m + 8, 12); }
     }
@@ -694,6 +697,12 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         float R[9];
         for (int r = 0; r < 3; r++) { const float* v = g_P.barrelR + r * 3; R[r*3] = c * v[0] + sn * v[2]; R[r*3+1] = v[1]; R[r*3+2] = -sn * v[0] + c * v[2]; }
         SetFrame(g_P.barrel, R, g_P.barrelP);
+        if (g_P.latch)                                                           // top lever swings aside while the barrels are open
+        {
+            float la = g_LatchAngle * 0.0174533f * o, lc = cosf(la), ls = sinf(la);
+            const float LR[9] = { lc, ls, 0, -ls, lc, 0, 0, 0, 1 };
+            SetFrame(g_P.latch, LR, g_P.latchP);
+        }
     }
     // ---- bolt
     if (g_P.bolt)
@@ -879,7 +888,7 @@ static void PedRender_hook(void* ped)
                         g_P.nExtra--;
                     }
                     { FindHand fh; void* pc = *(void**)((uint8_t*)ped + 0x20); void* pr = pc ? *(void**)((uint8_t*)pc + 8) : nullptr; FindHandIn(pr, &fh); g_P.lhand = fh.res; }
-                    LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p extra=%d barrel=%p", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand, g_P.nExtra, g_P.barrel);
+                    LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p extra=%d barrel=%p latch=%p", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand, g_P.nExtra, g_P.barrel, g_P.latch);
                 }
                 g_LastType = type; g_LastClump = clump;
                 if (g_P.mag || g_P.bolt || g_P.barrel)           // any weapon whose model has a "magazine" or "bolt" part
