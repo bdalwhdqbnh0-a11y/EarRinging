@@ -131,6 +131,7 @@ static int g_FpView = 0; static float g_FpR = 0.f, g_FpU = -0.20f, g_FpF = 0.45f
 static void* g_SceneSym = nullptr; static void* g_FpPed = nullptr;
 static float g_Spin = 7.0f, g_Drift = 0.35f, g_StayMs = 60000.f;
 static float g_HandOff[3] = { 0, 0, 0 };            // magazine position inside the left hand (hand-local axes)                          // radians the magazine tumbles until it lies on the ground
+static float g_BoltDirT[64][3]; static bool g_BoltDirHas[64] = {false}; static const float* g_BoltDirCur = nullptr;   // optional slide direction per weapon (ini BoltDir<type>=x,y,z)
 static float g_BoltBackT[64] = {0}, g_BoltBackCur = 0;   // per-weapon-type bolt travel (ini BoltBack<type>=)
 static std::vector<int> g_LockTypes = { 22, 23, 24 };      // weapons whose slide stays back when the magazine is empty
 static bool g_LockCur = false;
@@ -217,6 +218,7 @@ static void LoadConfig()
         else if (!strcmp(k, "HandY")) g_HandOff[1] = (float)atof(v);
         else if (!strcmp(k, "HandZ")) g_HandOff[2] = (float)atof(v);
         else if (!strcmp(k, "BoltBack")) g_BoltBack = (float)atof(v);
+        else if (!strncmp(k, "BoltDir", 7) && k[7] >= '0' && k[7] <= '9') { int t = atoi(k + 7); float a, b, c; if (t >= 0 && t < 64 && sscanf(v, "%f,%f,%f", &a, &b, &c) == 3) { float l = sqrtf(a*a + b*b + c*c); if (l > 1e-4f) { g_BoltDirT[t][0] = a/l; g_BoltDirT[t][1] = b/l; g_BoltDirT[t][2] = c/l; g_BoltDirHas[t] = true; } } }
         else if (!strncmp(k, "BoltBack", 8) && k[8] >= '0' && k[8] <= '9') { int t = atoi(k + 8); if (t >= 0 && t < 64) g_BoltBackT[t] = (float)atof(v); }
         else if (!strncmp(k, "MagDrop", 7) && k[7] >= '0' && k[7] <= '9') { int t = atoi(k + 7); if (t >= 0 && t < 64) g_MagDropT[t] = (float)atof(v); }
         else if (!strcmp(k, "LockOpenTypes")) { g_LockTypes.clear(); const char* q = v; while (*q) { g_LockTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
@@ -443,7 +445,7 @@ static FindGroundZ_t g_FindGroundZ = nullptr;
 static uint32_t* g_TimerMs = nullptr;
 static PedRender_t g_PedRenderOrig = nullptr;
 
-struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr, *lhand = nullptr, *dropF[8] = {0}; int nDrop = 0; float magP[3] = {0}, boltP[3] = {0}; float magR[9] = {1,0,0,0,1,0,0,0,1}, boltR[9] = {1,0,0,0,1,0,0,0,1}; };
+struct Parts { void* clump = nullptr; void* root = nullptr; void *mag = nullptr, *bolt = nullptr, *drop = nullptr, *lhand = nullptr, *dropF[8] = {0}; int nDrop = 0; float magP[3] = {0}, boltP[3] = {0}; float magR[9] = {1,0,0,0,1,0,0,0,1}, boltR[9] = {1,0,0,0,1,0,0,0,1}; void* extra[4] = {0}; float extraP[4][3] = {{0}}; float extraR[4][9] = {{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1},{1,0,0,0,1,0,0,0,1}}; int nExtra = 0; };
 static Parts g_P;
 static int g_LastType = -1; static void* g_LastClump = nullptr;
 static bool g_FpsOn = false;
@@ -460,6 +462,8 @@ static void CollectFrame(void* f, Parts* p)
     {
         if (!p->mag  && !strcmp(nm, "magazine")) { p->mag  = f; memcpy(p->magP,  m + 12, 12); memcpy(p->magR, m, 12); memcpy(p->magR + 3, m + 4, 12); memcpy(p->magR + 6, m + 8, 12); }
         if (!strncmp(nm, "magdrop", 7) && p->nDrop < 8) { p->dropF[p->nDrop++] = f; if (!p->drop) p->drop = f; }
+        if ((!strcmp(nm, "pump_semiauto") || !strcmp(nm, "charging_handle") || !strcmp(nm, "cocking_handle") || !strcmp(nm, "bolt_cover")) && p->nExtra < 4)   // extra parts that ride with the bolt (top cover / cocking handle)
+        { int k = p->nExtra++; p->extra[k] = f; memcpy(p->extraP[k], m + 12, 12); memcpy(p->extraR[k], m, 12); memcpy(p->extraR[k] + 3, m + 4, 12); memcpy(p->extraR[k] + 6, m + 8, 12); }
         if (!p->bolt && !strcmp(nm, "bolt"))     { p->bolt = f; memcpy(p->boltP, m + 12, 12); memcpy(p->boltR, m, 12); memcpy(p->boltR + 3, m + 4, 12); memcpy(p->boltR + 6, m + 8, 12); }
     }
     g_ForChildren(f, CollectCb, p);
@@ -675,9 +679,15 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     if (g_P.bolt)
     {
         float bb = (g_BoltBackCur != 0.f ? g_BoltBackCur : g_BoltBack) * bolt;
-        float pos[3] = { g_P.boltP[0] + g_P.boltR[0] * bb, g_P.boltP[1] + g_P.boltR[1] * bb, g_P.boltP[2] + g_P.boltR[2] * bb };   // along the slide's own axis
+        const float* bd = g_BoltDirCur ? g_BoltDirCur : g_P.boltR;
+        float pos[3] = { g_P.boltP[0] + bd[0] * bb, g_P.boltP[1] + bd[1] * bb, g_P.boltP[2] + bd[2] * bb };   // along the slide's own axis
         { static int bl = 0; if (bolt > 0.01f && bl++ < 12) LOGI("bolt moved: amount %.2f offset %.3f", bolt, bb); }
         SetFrame(g_P.bolt, g_P.boltR, pos);
+        for (int k = 0; k < g_P.nExtra; k++)       // top cover / cocking handle moves together with the bolt
+        {
+            float ep[3] = { g_P.extraP[k][0] + bd[0] * bb, g_P.extraP[k][1] + bd[1] * bb, g_P.extraP[k][2] + bd[2] * bb };
+            SetFrame(g_P.extra[k], g_P.extraR[k], ep);
+        }
     }
 }
 typedef void* (*GetHier_t)(void*); typedef float* (*GetMats_t)(void*); typedef int (*IdIdx_t)(void*, int);
@@ -836,13 +846,14 @@ static void PedRender_hook(void* ped)
                     g_P.root = *(void**)((uint8_t*)clump + 8);   // RwObject::parent = RwFrame*
                     CollectFrame(g_P.root, &g_P);
                     { FindHand fh; void* pc = *(void**)((uint8_t*)ped + 0x20); void* pr = pc ? *(void**)((uint8_t*)pc + 8) : nullptr; FindHandIn(pr, &fh); g_P.lhand = fh.res; }
-                    LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand);
+                    LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p extra=%d", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand, g_P.nExtra);
                 }
                 g_LastType = type; g_LastClump = clump;
                 if (g_P.mag || g_P.bolt)                         // any weapon whose model has a "magazine" or "bolt" part
                 {
                     bool slow = false; for (int t : g_SlowTypes) if (t == type) slow = true;
                     g_EffSpeed = slow ? g_ReloadSpeed : 1.0f; g_EffExtend = slow ? g_ExtendReload : 0;
+                    g_BoltDirCur = (type >= 0 && type < 64 && g_BoltDirHas[type]) ? g_BoltDirT[type] : nullptr;
                     g_LockCur = false; for (int t : g_LockTypes) if (t == type) g_LockCur = true;
                     g_BoltBackCur = (type >= 0 && type < 64) ? g_BoltBackT[type] : 0.f;
                     g_MagDropEff = (type >= 0 && type < 64 && g_MagDropT[type] > 0.f) ? g_MagDropT[type] : g_MagDrop;
