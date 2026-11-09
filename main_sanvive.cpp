@@ -462,7 +462,7 @@ static void CollectFrame(void* f, Parts* p)
     {
         if (!p->mag  && !strcmp(nm, "magazine")) { p->mag  = f; memcpy(p->magP,  m + 12, 12); memcpy(p->magR, m, 12); memcpy(p->magR + 3, m + 4, 12); memcpy(p->magR + 6, m + 8, 12); }
         if (!strncmp(nm, "magdrop", 7) && p->nDrop < 8) { p->dropF[p->nDrop++] = f; if (!p->drop) p->drop = f; }
-        if ((!strcmp(nm, "pump_semiauto") || !strcmp(nm, "charging_handle") || !strcmp(nm, "cocking_handle") || !strcmp(nm, "bolt_cover")) && p->nExtra < 4)   // extra parts that ride with the bolt (top cover / cocking handle)
+        if ((!strcmp(nm, "pump_semiauto") || !strcmp(nm, "charging_handle") || !strcmp(nm, "cocking_handle") || !strcmp(nm, "bolt_cover") || !strcmp(nm, "pump") || !strcmp(nm, "thingy")) && p->nExtra < 4)   // extra parts that ride with the bolt (top cover / cocking handle)
         { int k = p->nExtra++; p->extra[k] = f; memcpy(p->extraP[k], m + 12, 12); memcpy(p->extraR[k], m, 12); memcpy(p->extraR[k] + 3, m + 4, 12); memcpy(p->extraR[k] + 6, m + 8, 12); }
         if (!p->bolt && !strcmp(nm, "bolt"))     { p->bolt = f; memcpy(p->boltP, m + 12, 12); memcpy(p->boltR, m, 12); memcpy(p->boltR + 3, m + 4, 12); memcpy(p->boltR + 6, m + 8, 12); }
     }
