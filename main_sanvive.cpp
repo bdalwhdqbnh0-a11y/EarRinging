@@ -845,6 +845,12 @@ static void PedRender_hook(void* ped)
                     g_P = Parts(); g_P.clump = clump;
                     g_P.root = *(void**)((uint8_t*)clump + 8);   // RwObject::parent = RwFrame*
                     CollectFrame(g_P.root, &g_P);
+                    if (!g_P.bolt && g_P.nExtra > 0)       // pump-action gun: the pump forend is the moving part
+                    {
+                        g_P.bolt = g_P.extra[0]; memcpy(g_P.boltP, g_P.extraP[0], 12); memcpy(g_P.boltR, g_P.extraR[0], 36);
+                        for (int k = 1; k < g_P.nExtra; k++) { g_P.extra[k-1] = g_P.extra[k]; memcpy(g_P.extraP[k-1], g_P.extraP[k], 12); memcpy(g_P.extraR[k-1], g_P.extraR[k], 36); }
+                        g_P.nExtra--;
+                    }
                     { FindHand fh; void* pc = *(void**)((uint8_t*)ped + 0x20); void* pr = pc ? *(void**)((uint8_t*)pc + 8) : nullptr; FindHandIn(pr, &fh); g_P.lhand = fh.res; }
                     LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p extra=%d", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand, g_P.nExtra);
                 }
