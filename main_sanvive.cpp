@@ -117,6 +117,7 @@ static std::string g_Template = "rifle", g_TemplateBad = "riflebad";   // vanill
 static int  g_AkType = 30;
 static std::string g_AnimGrp[64], g_AnimGrpPoor[64];   // per weapon type: ini Anim<type>=group[,poorGroup]
 static bool g_AnimAny = false;
+static std::vector<std::pair<std::string, std::string>> g_GroupTemplate;   // ini: Template.<group>=<vanilla group whose descriptor table is copied>
 static bool Wanted(const std::vector<std::string>& l, const char* n);
 // settings (SanVive.ini)
 static int   g_Animate = 1;
@@ -212,6 +213,7 @@ static void LoadConfig()
         else if (!strcmp(k, "AkOffset")) { int o = atoi(v); if (o > 0) g_AkOffset = o; }
         else if (!strcmp(k, "AkType")) g_AkType = atoi(v);
         else if (!strcmp(k, "AkGroup")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_AkGroup = t[0]; }
+        else if (!strncmp(k, "Template.", 9)) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_GroupTemplate.push_back({ std::string(k + 9), t[0] }); }
         else if (!strcmp(k, "Template")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_Template = t[0]; }
         else if (!strcmp(k, "TemplateBad")) { std::vector<std::string> t; SplitList(v, t); if (!t.empty()) g_TemplateBad = t[0]; }
         else if (!strcmp(k, "Animate")) g_Animate = atoi(v);
@@ -364,7 +366,9 @@ static void AddGroups()
             if (*g_NumDefs >= DEF_MAX - 1) { LOGE("definition table full"); continue; }
             size_t la = strlen(a);
             bool bad = la >= 3 && !strcasecmp(a + la - 3, "bad");
-            int ti = FindDef((bad ? g_TemplateBad : g_Template).c_str());
+            std::string tname = bad ? g_TemplateBad : g_Template;
+            for (auto& gt : g_GroupTemplate) if (!strcasecmp(gt.first.c_str(), a)) tname = gt.second;
+            int ti = FindDef(tname.c_str());
             unsigned type = 7; void* descs = g_StdDescs;
             if (ti >= 0)
             {
@@ -372,8 +376,8 @@ static void AddGroups()
                 type = *(unsigned*)(t + 0x20);
                 descs = *(void**)(t + 0x30);
             }
-            else LOGE("template group '%s' not found, using the default table", (bad ? g_TemplateBad : g_Template).c_str());
-            LOGI("  descriptor table for '%s' copied from '%s': %p", a, (bad ? g_TemplateBad : g_Template).c_str(), descs);
+            else LOGE("template group '%s' not found, using the default table", tname.c_str());
+            LOGI("  descriptor table for '%s' copied from '%s': %p", a, tname.c_str(), descs);
             cur = g_AddDef(a, b, type, (unsigned)n, descs);
             skip = false; ++added;
             LOGI("group '%s' block '%s' anims=%d -> id %d", a, b, n, FindDef(a));
