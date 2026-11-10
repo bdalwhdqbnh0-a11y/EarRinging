@@ -120,6 +120,8 @@ static int   g_Animate = 1;
 static float g_ReloadMs = 1000.f;                    // used only when the real reload time can't be read
 static float g_ReloadSpeed = 0.6f;                  // reload animation speed (1 = normal, lower = slower)
 static int   g_ExtendReload = 1;                     // keep the reload state alive for the slowed animation
+static float g_TimeT[64][5];   // per-weapon-type overrides (ini MagOut1<type>, MagOut2<type>, MagIn1<type>, MagIn2<type>, BoltAt<type>); 0 = use the default
+static float g_eMO1 = 0.12f, g_eMO2 = 0.26f, g_eMI1 = 0.42f, g_eMI2 = 0.92f, g_eBoltAt = 0.90f;   // timings in effect for the weapon in hand
 static float g_MagOut1 = 0.12f, g_MagOut2 = 0.26f;   // magazine slides out of the gun (progress 0..1)
 static float g_MagIn1 = 0.42f, g_MagIn2 = 0.92f;     // new magazine slides in
 static float g_MagDrop = 0.30f; static float g_MagDropT[64] = {0}, g_MagDropEff = 0.30f;   // per-weapon (ini MagDrop<type>=)                      // how far the magazine slides down before it is released
@@ -222,6 +224,12 @@ static void LoadConfig()
         else if (!strcmp(k, "HandZ")) g_HandOff[2] = (float)atof(v);
         else if (!strcmp(k, "BoltBack")) g_BoltBack = (float)atof(v);
         else if (!strncmp(k, "BoltDir", 7) && k[7] >= '0' && k[7] <= '9') { int t = atoi(k + 7); float a, b, c; if (t >= 0 && t < 64 && sscanf(v, "%f,%f,%f", &a, &b, &c) == 3) { float l = sqrtf(a*a + b*b + c*c); if (l > 1e-4f) { g_BoltDirT[t][0] = a/l; g_BoltDirT[t][1] = b/l; g_BoltDirT[t][2] = c/l; g_BoltDirHas[t] = true; } } }
+        else if ((!strncmp(k, "MagOut1", 7) || !strncmp(k, "MagOut2", 7) || !strncmp(k, "MagIn1", 6) || !strncmp(k, "MagIn2", 6) || !strncmp(k, "BoltAt", 6)) && k[(k[3] == 'O') ? 7 : 6] >= '0' && k[(k[3] == 'O') ? 7 : 6] <= '9')
+        {
+            int idx = !strncmp(k, "MagOut1", 7) ? 0 : !strncmp(k, "MagOut2", 7) ? 1 : !strncmp(k, "MagIn1", 6) ? 2 : !strncmp(k, "MagIn2", 6) ? 3 : 4;
+            const char* d = k + ((idx == 0 || idx == 1) ? 7 : 6);
+            if (*d >= '0' && *d <= '9') { int t = atoi(d); if (t >= 0 && t < 64) g_TimeT[t][idx] = (float)atof(v); }
+        }
         else if (!strncmp(k, "BoltBack", 8) && k[8] >= '0' && k[8] <= '9') { int t = atoi(k + 8); if (t >= 0 && t < 64) g_BoltBackT[t] = (float)atof(v); }
         else if (!strncmp(k, "MagDrop", 7) && k[7] >= '0' && k[7] <= '9') { int t = atoi(k + 7); if (t >= 0 && t < 64) g_MagDropT[t] = (float)atof(v); }
         else if (!strcmp(k, "LockOpenTypes")) { g_LockTypes.clear(); const char* q = v; while (*q) { g_LockTypes.push_back(atoi(q)); while (*q && *q != ',') ++q; if (*q == ',') ++q; } }
@@ -540,7 +548,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (*tf < want && *tf + 20000 > want) *tf = want;
     }
     if (state != 2) gStart = 0;
-    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; if (!racked) { float pe = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; LOGI("reload ended before the slide rack (p=%.2f, BoltAt=%.2f)", pe, g_BoltAt); } }
+    if (reloadActive && state != 2 && now - lastIn2 > 200) { reloadActive = false; if (!racked) { float pe = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; LOGI("reload ended before the slide rack (p=%.2f, BoltAt=%.2f)", pe, g_eBoltAt); } }
     bool reloading = reloadActive;
     if (reloading && g_EffSpeed != 1.f && g_GetAssocId)                          // slow the reload animation down
     {
@@ -555,7 +563,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
     }
     float p = 0;
     if (reloading) { p = reloadDur > 0 ? (float)(now - reloadStart) / reloadDur : 1.f; if (p > 1) p = 1; }
-    if (reloading && !racked && p >= (wasEmpty ? g_BoltAt : fminf(g_BoltAt, g_BoltAtPartial))) { racked = true; rackTime = now; LOGI("slide rack at p=%.2f (reload %.0f ms, wasEmpty=%d)", p, reloadDur, (int)wasEmpty); }
+    if (reloading && !racked && p >= (wasEmpty ? g_eBoltAt : fminf(g_eBoltAt, g_BoltAtPartial))) { racked = true; rackTime = now; LOGI("slide rack at p=%.2f (reload %.0f ms, wasEmpty=%d)", p, reloadDur, (int)wasEmpty); }
     float bolt = Profile(shotTime ? (float)(now - shotTime) : 100000.f, g_FireBoltStart, g_FireBoltHold, g_FireBoltEnd);
     if (rackTime)
     {
@@ -592,27 +600,27 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                     haveHand = true;
                 }
             }
-            if (p >= g_MagOut1 && p < g_MagOut2 && haveHand)       // the left hand grabs the magazine and pulls it out
+            if (p >= g_eMO1 && p < g_eMO2 && haveHand)       // the left hand grabs the magazine and pulls it out
             {
-                float t = (p - g_MagOut1) / (g_MagOut2 - g_MagOut1);          // first straight out of the magazine well, then to the hand
+                float t = (p - g_eMO1) / (g_eMO2 - g_eMO1);          // first straight out of the magazine well, then to the hand
                 float below[3] = { g_P.magP[0] - g_P.magR[6] * g_MagDropEff, g_P.magP[1] - g_P.magR[7] * g_MagDropEff, g_P.magP[2] - g_P.magR[8] * g_MagDropEff };   // slide along the magazine's own long axis
                 if (t < 0.5f) { float u2 = Smooth(t * 2); for (int j = 0; j < 3; ++j) pos[j] = g_P.magP[j] + (below[j] - g_P.magP[j]) * u2; }
                 else { float u2 = Smooth((t - 0.5f) * 2); for (int j = 0; j < 3; ++j) pos[j] = below[j] + (hl[j] - below[j]) * u2; }
             }
-            else if (p >= g_MagIn1 && p < g_MagIn2 && haveHand)    // new magazine appears in the hand, then goes into the weapon
+            else if (p >= g_eMI1 && p < g_eMI2 && haveHand)    // new magazine appears in the hand, then goes into the weapon
             {
-                float s2 = (p - g_MagIn1) / (g_MagIn2 - g_MagIn1);             // in the hand, then below the well, then straight up into it
+                float s2 = (p - g_eMI1) / (g_eMI2 - g_eMI1);             // in the hand, then below the well, then straight up into it
                 float below[3] = { g_P.magP[0] - g_P.magR[6] * g_MagDropEff, g_P.magP[1] - g_P.magR[7] * g_MagDropEff, g_P.magP[2] - g_P.magR[8] * g_MagDropEff };   // slide along the magazine's own long axis
                 if (s2 < 0.30f) { for (int j = 0; j < 3; ++j) pos[j] = hl[j]; }
                 else if (s2 < 0.65f) { float u2 = Smooth((s2 - 0.30f) / 0.35f); for (int j = 0; j < 3; ++j) pos[j] = hl[j] + (below[j] - hl[j]) * u2; }
                 else { float u2 = Smooth((s2 - 0.65f) / 0.35f); for (int j = 0; j < 3; ++j) pos[j] = below[j] + (g_P.magP[j] - below[j]) * u2; }
             }
-            else if (p >= g_MagOut1 && p < g_MagOut2) pos[2] -= g_MagDropEff * Smooth((p - g_MagOut1) / (g_MagOut2 - g_MagOut1));
-            else if (p >= g_MagOut2 && p < g_MagIn1) { if (!g_GetBonePos) pos[2] -= g_MagDropEff; fallingNow = true; hideMag = g_P.drop != nullptr; }
-            else if (p >= g_MagIn1 && p < g_MagIn2 && !haveHand) pos[2] -= g_MagDropEff * (1 - Smooth((p - g_MagIn1) / (g_MagIn2 - g_MagIn1)));
+            else if (p >= g_eMO1 && p < g_eMO2) pos[2] -= g_MagDropEff * Smooth((p - g_eMO1) / (g_eMO2 - g_eMO1));
+            else if (p >= g_eMO2 && p < g_eMI1) { if (!g_GetBonePos) pos[2] -= g_MagDropEff; fallingNow = true; hideMag = g_P.drop != nullptr; }
+            else if (p >= g_eMI1 && p < g_eMI2 && !haveHand) pos[2] -= g_MagDropEff * (1 - Smooth((p - g_eMI1) / (g_eMI2 - g_eMI1)));
         }
         void* tgt = g_P.drop ? g_P.drop : g_P.mag;
-        bool simulate = g_P.drop ? ((reloading && p >= g_MagOut2 && !(released && simDone)) || simActive) : fallingNow;
+        bool simulate = g_P.drop ? ((reloading && p >= g_eMO2 && !(released && simDone)) || simActive) : fallingNow;
         if (simulate && g_GetLTM && g_P.root)
         {
             float* ltm = g_GetLTM(g_P.mag);                     // magazine world pose right now (still sitting at the bottom of its slide)
@@ -684,7 +692,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
         if (hideMag) { const float hs[9] = { 1e-4f, 0, 0, 0, 1e-4f, 0, 0, 0, 1e-4f }; SetFrame(g_P.mag, hs, pos); }
         else if (!(fallingNow && !g_P.drop && simulate))
         {
-            if (!g_P.drop && p >= g_MagIn1) released = false;
+            if (!g_P.drop && p >= g_eMI1) released = false;
             SetFrame(g_P.mag, g_P.magR, pos);
         }
     }
@@ -898,6 +906,10 @@ static void PedRender_hook(void* ped)
                     g_BoltDirCur = (type >= 0 && type < 64 && g_BoltDirHas[type]) ? g_BoltDirT[type] : nullptr;
                     g_LockCur = false; for (int t : g_LockTypes) if (t == type) g_LockCur = true;
                     g_BoltBackCur = (type >= 0 && type < 64) ? g_BoltBackT[type] : 0.f;
+                    { const float* tt = (type >= 0 && type < 64) ? g_TimeT[type] : nullptr;
+                      g_eMO1 = (tt && tt[0] > 0) ? tt[0] : g_MagOut1; g_eMO2 = (tt && tt[1] > 0) ? tt[1] : g_MagOut2;
+                      g_eMI1 = (tt && tt[2] > 0) ? tt[2] : g_MagIn1;  g_eMI2 = (tt && tt[3] > 0) ? tt[3] : g_MagIn2;
+                      g_eBoltAt = (tt && tt[4] > 0) ? tt[4] : g_BoltAt; }
                     g_MagDropEff = (type >= 0 && type < 64 && g_MagDropT[type] > 0.f) ? g_MagDropT[type] : g_MagDrop;
                     g_FpPed = ped;
                     Animate(ped, wp, state);
