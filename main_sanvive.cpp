@@ -600,6 +600,7 @@ static void Animate(void* ped, const uint8_t* wp, int state)
                     haveHand = true;
                 }
             }
+            { static uint32_t loggedFor = 0; if (loggedFor != reloadStart) { loggedFor = reloadStart; LOGI("hand follow: %s (GetBonePosition=%p fps=%d)", haveHand ? "ON (left hand bone 34 found)" : "OFF", (void*)g_GetBonePos, (int)g_FpsOn); } }
             if (p >= g_eMO1 && p < g_eMO2 && haveHand)       // the left hand grabs the magazine and pulls it out
             {
                 float t = (p - g_eMO1) / (g_eMO2 - g_eMO1);          // first straight out of the magazine well, then to the hand
@@ -896,7 +897,7 @@ static void PedRender_hook(void* ped)
                         g_P.nExtra--;
                     }
                     { FindHand fh; void* pc = *(void**)((uint8_t*)ped + 0x20); void* pr = pc ? *(void**)((uint8_t*)pc + 8) : nullptr; FindHandIn(pr, &fh); g_P.lhand = fh.res; }
-                    LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d lhand=%p extra=%d barrel=%p latch=%p", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand, g_P.nExtra, g_P.barrel, g_P.latch);
+                    LOGI("weapon type %d parts: magazine=%p bolt=%p magdrops=%d (lhand frame %p is not used) extra=%d barrel=%p latch=%p", type, g_P.mag, g_P.bolt, g_P.nDrop, g_P.lhand, g_P.nExtra, g_P.barrel, g_P.latch);
                 }
                 g_LastType = type; g_LastClump = clump;
                 if (g_P.mag || g_P.bolt || g_P.barrel)           // any weapon whose model has a "magazine" or "bolt" part
