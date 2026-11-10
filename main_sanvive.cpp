@@ -115,6 +115,9 @@ static int  g_AkOffset = 0x1c;    // byte offset in CWeaponInfo of the anim grou
 static std::string g_AkGroup = "ar15", g_AkGroupPoor = "ar15bad";
 static std::string g_Template = "rifle", g_TemplateBad = "riflebad";   // vanilla groups whose descriptor table we copy
 static int  g_AkType = 30;
+static std::string g_AnimGrp[64], g_AnimGrpPoor[64];   // per weapon type: ini Anim<type>=group[,poorGroup]
+static bool g_AnimAny = false;
+static bool Wanted(const std::vector<std::string>& l, const char* n);
 // settings (SanVive.ini)
 static int   g_Animate = 1;
 static float g_ReloadMs = 1000.f;                    // used only when the real reload time can't be read
@@ -190,6 +193,21 @@ static void LoadConfig()
         else if (!strcmp(k, "FpsYaw")) g_FpsYaw = (float)atof(v);
         else if (!strcmp(k, "FpsPitch")) g_FpsPitch = (float)atof(v);
         else if (!strcmp(k, "FpsHideArms")) g_FpsHide = atoi(v);
+        else if (!strncmp(k, "Anim", 4) && k[4] >= '0' && k[4] <= '9')       // Anim30=aug  or  Anim31=ar15,ar15bad
+        {
+            int t = atoi(k + 4); std::vector<std::string> l; SplitList(v, l);
+            if (t >= 0 && t < 64 && !l.empty())
+            {
+                g_AnimGrp[t] = l[0]; g_AnimGrpPoor[t] = l.size() > 1 ? l[1] : l[0]; g_AnimAny = true;
+                for (auto& gname : l)
+                {
+                    if (!Wanted(g_Groups, gname.c_str())) g_Groups.push_back(gname);
+                    std::string blk = gname; size_t n = blk.size();
+                    if (n > 3 && !strcasecmp(blk.c_str() + n - 3, "bad")) blk.resize(n - 3);
+                    if (!Wanted(g_Blocks, blk.c_str())) g_Blocks.push_back(blk);
+                }
+            }
+        }
         else if (!strcmp(k, "AkAnim")) g_AkAnim = atoi(v);
         else if (!strcmp(k, "AkOffset")) { int o = atoi(v); if (o > 0) g_AkOffset = o; }
         else if (!strcmp(k, "AkType")) g_AkType = atoi(v);
@@ -370,7 +388,7 @@ static CreateGroups_t g_CreateGroupsOrig = nullptr;
 static bool g_Done = false;
 static void CreateGroups_hook(void* self)
 {
-    if (!g_AkAnim) { g_CreateGroupsOrig(self); return; }   // animations off: do not add any group (other mods add their own)
+    if (!g_AkAnim && !g_AnimAny) { g_CreateGroupsOrig(self); return; }   // animations off: do not add any group (other mods add their own)
     if (!g_Done)
     {
         g_Done = true;
@@ -413,23 +431,30 @@ static LoadWeaponData_t g_LoadWeaponDataOrig = nullptr;
 static void LoadWeaponData_hook()
 {
     g_LoadWeaponDataOrig();
-    if (!g_GetWeaponInfo || !g_AkAnim) return;
+    if (!g_GetWeaponInfo || (!g_AkAnim && !g_AnimAny)) return;
     static int calls = 0; ++calls;
-    for (int skill = 0; skill < 3; ++skill)
+    for (int type = 0; type < 64; ++type)
     {
-        uint8_t* wi = (uint8_t*)g_GetWeaponInfo(g_AkType, (int8_t)skill);
-        if (!wi) continue;
-        char buf[512]; int o = 0;
-        for (int i = 0; i < 0x70; i += 4) o += snprintf(buf + o, sizeof(buf) - o, "%02x:%d ", i, *(int*)(wi + i));
-        if (calls == 1) LOGI("weapon %d skill %d (%p) words: %s", g_AkType, skill, (void*)wi, buf);
-        const std::string& gname = (skill == 0) ? g_AkGroupPoor : g_AkGroup;
-        int id = FindDef(gname.c_str());
-        if (g_AkOffset > 0 && id >= 0)
+        std::string gGood, gPoor;
+        if (!g_AnimGrp[type].empty()) { gGood = g_AnimGrp[type]; gPoor = g_AnimGrpPoor[type]; }
+        else if (g_AkAnim && type == g_AkType) { gGood = g_AkGroup; gPoor = g_AkGroupPoor; }
+        else continue;
+        for (int skill = 0; skill < 3; ++skill)
         {
-            LOGI("  skill %d: +0x%x was %d, now %d (group '%s')", skill, g_AkOffset, *(int*)(wi + g_AkOffset), id, gname.c_str());
-            *(int*)(wi + g_AkOffset) = id;
+            uint8_t* wi = (uint8_t*)g_GetWeaponInfo(type, (int8_t)skill);
+            if (!wi) continue;
+            char buf[512]; int o = 0;
+            for (int i = 0; i < 0x70; i += 4) o += snprintf(buf + o, sizeof(buf) - o, "%02x:%d ", i, *(int*)(wi + i));
+            if (calls == 1) LOGI("weapon %d skill %d (%p) words: %s", type, skill, (void*)wi, buf);
+            const std::string& gname = (skill == 0) ? gPoor : gGood;
+            int id = FindDef(gname.c_str());
+            if (g_AkOffset > 0 && id >= 0)
+            {
+                LOGI("  weapon %d skill %d: +0x%x was %d, now %d (group '%s')", type, skill, g_AkOffset, *(int*)(wi + g_AkOffset), id, gname.c_str());
+                *(int*)(wi + g_AkOffset) = id;
+            }
+            else LOGI("  weapon %d skill %d: group '%s' not defined yet, left as it is", type, skill, gname.c_str());
         }
-        else LOGI("  skill %d: group '%s' not defined yet, AK left as it is", skill, gname.c_str());
     }
 }
 
