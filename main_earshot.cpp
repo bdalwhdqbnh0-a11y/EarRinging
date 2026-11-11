@@ -259,6 +259,7 @@ static Bank g_Banks[] = {
     { 33, "Cuntgun",    1 },
     { 24, "DesertEagle", 7 },
     { 31, "M4",         50 },
+    { 28, "MicroUzi",   50 },
 };
 static const int NBANKS = sizeof(g_Banks) / sizeof(g_Banks[0]);
 static Bank* FindBank(int type) { for (int i = 0; i < NBANKS; ++i) if (g_Banks[i].type == type) return &g_Banks[i]; return nullptr; }
