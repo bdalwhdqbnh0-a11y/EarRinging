@@ -269,7 +269,7 @@ static void EnsureLoaded()
          (int)g_Shoot.size(), (int)g_After.size(), (int)g_Reload1.size(), (int)g_Reload2.size(), (int)g_Low.size(), d.c_str());
 }
 
-static const int NSRC = 16;
+static const int NSRC = 32;
 static ALuint g_Src[NSRC];
 static bool g_SrcInit = false;
 
@@ -306,6 +306,8 @@ static void Play(const std::vector<Snd>& set, float gain, bool relative, const f
     alSourcef_(src, AL_MAX_DISTANCE, g_MaxDist);
     alSourcef_(src, AL_ROLLOFF_FACTOR, relative ? 0.f : g_Rolloff);
     alSourcePlay_(src);
+    static int plays = 0;
+    if (plays < 60) { ++plays; LOGI("play buf=%u src=%u slot=%d gain=%.2f rel=%d err=0x%x", s.buf, src, idx, gain * g_Volume, (int)relative, alGetError_()); }
 }
 
 // delayed "after" tail (played once the burst stops)
@@ -315,22 +317,21 @@ static long long g_LowDue = 0;
 static std::atomic<bool> g_Run{false};
 static long long NowMs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 
-static void Worker()
+// runs on the game thread every frame (hook on CTimer::Update)
+static void (*TimerUpdate_orig)() = nullptr;
+static void Tick()
 {
-    while (g_Run)
+    Pending p; bool fire = false, low = false;
     {
-        usleep(15000);
-        Pending p; bool fire = false;
-        {
-            std::lock_guard<std::mutex> lk(g_Mtx);
-            if (g_Pend.on && NowMs() >= g_Pend.due) { p = g_Pend; g_Pend.on = false; fire = true; }
-        }
-        if (fire) Play(g_After, g_AfterVol, p.rel, p.pos, true);
-        bool low = false;
-        { std::lock_guard<std::mutex> lk(g_Mtx); if (g_LowDue && NowMs() >= g_LowDue) { g_LowDue = 0; low = true; } }
-        if (low) Play(g_Low, g_LowVol, true, nullptr, false);
+        std::lock_guard<std::mutex> lk(g_Mtx);
+        long long now = NowMs();
+        if (g_Pend.on && now >= g_Pend.due) { p = g_Pend; g_Pend.on = false; fire = true; }
+        if (g_LowDue && now >= g_LowDue) { g_LowDue = 0; low = true; }
     }
+    if (fire) Play(g_After, g_AfterVol, p.rel, p.pos, true);
+    if (low) Play(g_Low, g_LowVol, true, nullptr, false);
 }
+static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Loaded) Tick(); }
 
 // ---------------------------------------------------------------- game side
 typedef void* (*FindPlayerPed_t)(int);
@@ -435,7 +436,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     Install("_ZN20CAEWeaponAudioEntity10WeaponFireE11eWeaponTypeP9CPhysicali", (void*)WeaponFire_hook, &WeaponFire_orig);
     Install("_ZN20CAEWeaponAudioEntity12WeaponReloadE11eWeaponTypeP9CPhysicali", (void*)WeaponReload_hook, &WeaponReload_orig);
     g_Run = true;
-    std::thread(Worker).detach();
+    Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
     // wavs are decoded on the first shot's thread-safe path below (needs the game's OpenAL context)
     std::thread([] {
         for (int i = 0; i < 200 && g_Run; ++i)
