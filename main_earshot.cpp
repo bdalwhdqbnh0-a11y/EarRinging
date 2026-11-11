@@ -311,6 +311,7 @@ static void Play(const std::vector<Snd>& set, float gain, bool relative, const f
 // delayed "after" tail (played once the burst stops)
 struct Pending { bool on = false; long long due = 0; bool rel = true; float pos[3] = {0, 0, 0}; };
 static Pending g_Pend;
+static long long g_LowDue = 0;
 static std::atomic<bool> g_Run{false};
 static long long NowMs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 
@@ -325,6 +326,9 @@ static void Worker()
             if (g_Pend.on && NowMs() >= g_Pend.due) { p = g_Pend; g_Pend.on = false; fire = true; }
         }
         if (fire) Play(g_After, g_AfterVol, p.rel, p.pos, true);
+        bool low = false;
+        { std::lock_guard<std::mutex> lk(g_Mtx); if (g_LowDue && NowMs() >= g_LowDue) { g_LowDue = 0; low = true; } }
+        if (low) Play(g_Low, g_LowVol, true, nullptr, false);
     }
 }
 
@@ -335,6 +339,8 @@ static void (*WeaponFire_orig)(void*, int, void*, int) = nullptr;
 static void (*WeaponReload_orig)(void*, int, void*, int) = nullptr;
 static int g_LogCount = 0;
 static int g_LastClip = -1;
+static bool g_LowDone = false;
+static int g_LowDelayMs = 150;
 
 static void EntityPos(void* ent, float* out)
 {
@@ -369,11 +375,14 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
     {
         int t = -1; int clip = PedClip(ent, &t);
         if (g_LogCount < 12) { LOGI("fire: player clip=%d wtype=%d", clip, t); ++g_LogCount; }
-        // clip is read while the shot is being fired; play the warning when it crosses LowAmmoAt
-        if (clip >= 0 && clip != g_LastClip)
+        // clip is read while the shot is being fired; warn once per magazine when it reaches LowAmmoAt
+        if (clip > g_LowAmmoAt) g_LowDone = false;
+        if (clip >= 0 && clip <= g_LowAmmoAt && !g_LowDone)
         {
-            if (clip == g_LowAmmoAt || (clip == g_LowAmmoAt - 1 && g_LastClip > g_LowAmmoAt)) Play(g_Low, g_LowVol, true, nullptr, false);
-            g_LastClip = clip;
+            g_LowDone = true;
+            std::lock_guard<std::mutex> lk(g_Mtx);
+            g_LowDue = NowMs() + g_LowDelayMs;
+            LOGI("low ammo warning (clip=%d)", clip);
         }
     }
     else if (g_LogCount < 12)
@@ -393,7 +402,7 @@ static void WeaponReload_hook(void* self, int type, void* ent, int ev)
     LOGI("reload event=%d (0x%x) -> %s", ev, ev, second ? "reload_two" : "reload_one");
     if (second) Play(g_Reload2, g_ReloadVol, player, pos, false);
     else        Play(g_Reload1, g_ReloadVol, player, pos, false);
-    g_LastClip = -1;
+    g_LastClip = -1; g_LowDone = false;
 }
 
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
