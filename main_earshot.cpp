@@ -388,7 +388,7 @@ static void WeaponReload_hook(void* self, int type, void* ent, int ev)
     if (!g_Enabled || type != AK || !ent || !g_Loaded) { WeaponReload_orig(self, type, ent, ev); return; }
     bool player = g_FindPlayerPed && ent == g_FindPlayerPed(0);
     float pos[3]; EntityPos(ent, pos);
-    bool second = (ev == 0x92);
+    bool second = (ev != 0x92);   // 0x92 = first sound (mag out), 0x93 = second (mag in)
     if (g_ReloadSwap) second = !second;
     LOGI("reload event=%d (0x%x) -> %s", ev, ev, second ? "reload_two" : "reload_one");
     if (second) Play(g_Reload2, g_ReloadVol, player, pos, false);
