@@ -251,24 +251,33 @@ static void LoadSet(const std::string& dir, const char* base, std::vector<Snd>& 
     }
 }
 
-// ---------------------------------------------------------------- AK-47 sound bank
-static std::vector<Snd> g_Shoot, g_After, g_Reload1, g_Reload2, g_Low;
+// ---------------------------------------------------------------- weapon sound banks
+struct Bank { int type; const char* folder; int clip; std::vector<Snd> shoot, after, r1, r2, low; };
+static Bank g_Banks[] = {
+    { 30, "AK47",      30 },
+    { 25, "Chromegun",  1 },
+};
+static const int NBANKS = sizeof(g_Banks) / sizeof(g_Banks[0]);
+static Bank* FindBank(int type) { for (int i = 0; i < NBANKS; ++i) if (g_Banks[i].type == type) return &g_Banks[i]; return nullptr; }
 static std::mutex g_Mtx;
 static bool g_Loaded = false;
-static const int AK = 30;
 
 static void EnsureLoaded()
 {
     if (g_Loaded) return;
     g_Loaded = true;
-    std::string d = g_Dir + "AK47/";
-    LoadSet(d, "shoot", g_Shoot);
-    LoadSet(d, "after", g_After);
-    LoadSet(d, "reload_one", g_Reload1);
-    LoadSet(d, "reload_two", g_Reload2);
-    LoadSet(d, "low_ammo", g_Low);
-    LOGI("AK47 sounds: shoot=%d after=%d reload_one=%d reload_two=%d low_ammo=%d (dir %s)",
-         (int)g_Shoot.size(), (int)g_After.size(), (int)g_Reload1.size(), (int)g_Reload2.size(), (int)g_Low.size(), d.c_str());
+    for (int i = 0; i < NBANKS; ++i)
+    {
+        Bank& b = g_Banks[i];
+        std::string d = g_Dir + b.folder + "/";
+        LoadSet(d, "shoot", b.shoot);
+        LoadSet(d, "after", b.after);
+        LoadSet(d, "reload_one", b.r1);
+        LoadSet(d, "reload_two", b.r2);
+        LoadSet(d, "low_ammo", b.low);
+        LOGI("%s sounds: shoot=%d after=%d reload_one=%d reload_two=%d low_ammo=%d (dir %s)", b.folder,
+             (int)b.shoot.size(), (int)b.after.size(), (int)b.r1.size(), (int)b.r2.size(), (int)b.low.size(), d.c_str());
+    }
 }
 
 static const int NSRC = 32;
@@ -313,9 +322,8 @@ static void Play(const std::vector<Snd>& set, float gain, bool relative, const f
 }
 
 // delayed "after" tail (played once the burst stops)
-struct Pending { bool on = false; long long due = 0; bool rel = true; float pos[3] = {0, 0, 0}; };
+struct Pending { bool on = false; long long due = 0; bool rel = true; float pos[3] = {0, 0, 0}; Bank* bank = nullptr; };
 static Pending g_Pend;
-static long long g_LowDue = 0;
 static std::atomic<bool> g_Run{false};
 static long long NowMs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 
@@ -323,15 +331,12 @@ static long long NowMs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); retur
 static void (*TimerUpdate_orig)() = nullptr;
 static void Tick()
 {
-    Pending p; bool fire = false, low = false;
+    Pending p; bool fire = false;
     {
         std::lock_guard<std::mutex> lk(g_Mtx);
-        long long now = NowMs();
-        if (g_Pend.on && now >= g_Pend.due) { p = g_Pend; g_Pend.on = false; fire = true; }
-        if (g_LowDue && now >= g_LowDue) { g_LowDue = 0; low = true; }
+        if (g_Pend.on && NowMs() >= g_Pend.due) { p = g_Pend; g_Pend.on = false; fire = true; }
     }
-    if (fire) Play(g_After, g_AfterVol, p.rel, p.pos, true);
-    if (low) Play(g_Low, g_LowVol, true, nullptr, false);
+    if (fire && p.bank) Play(p.bank->after, g_AfterVol, p.rel, p.pos, true);
 }
 static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Loaded) Tick(); }
 
@@ -341,8 +346,6 @@ static FindPlayerPed_t g_FindPlayerPed = nullptr;
 static void (*WeaponFire_orig)(void*, int, void*, int) = nullptr;
 static void (*WeaponReload_orig)(void*, int, void*, int) = nullptr;
 static int g_LogCount = 0;
-static int g_LastClip = -1;
-static bool g_LowDone = false;
 static int g_LowDelayMs = 150;
 
 static void EntityPos(void* ent, float* out)
@@ -365,25 +368,23 @@ static int PedClip(void* ped, int* typeOut)
 
 static void WeaponFire_hook(void* self, int type, void* ent, int vol)
 {
-    if (!g_Enabled || type != AK || !ent || !g_Loaded || g_Shoot.empty()) { WeaponFire_orig(self, type, ent, vol); return; }
+    Bank* bk = FindBank(type);
+    if (!g_Enabled || !bk || !ent || !g_Loaded || bk->shoot.empty()) { WeaponFire_orig(self, type, ent, vol); return; }
     bool player = g_FindPlayerPed && ent == g_FindPlayerPed(0);
     float pos[3]; EntityPos(ent, pos);
-    Play(g_Shoot, g_ShootVol, player, pos, true);
+    Play(bk->shoot, g_ShootVol, player, pos, true);
     {
         std::lock_guard<std::mutex> lk(g_Mtx);
-        g_Pend.on = true; g_Pend.due = NowMs() + g_AfterDelayMs; g_Pend.rel = player;
+        g_Pend.on = true; g_Pend.due = NowMs() + g_AfterDelayMs; g_Pend.rel = player; g_Pend.bank = bk;
         memcpy(g_Pend.pos, pos, sizeof(pos));
     }
     if (player)
     {
         int t = -1; int clip = PedClip(ent, &t);
-        if (g_LogCount < 12) { LOGI("fire: player clip=%d wtype=%d", clip, t); ++g_LogCount; }
+        if (g_LogCount < 12) { LOGI("fire: %s player clip=%d wtype=%d", bk->folder, clip, t); ++g_LogCount; }
         // CS:GO style cue: once the magazine falls below LowAmmoPercent of its size, low_ammo.wav is layered on every shot
-        if (clip >= 1 && clip * 100 < g_LowPct * g_ClipSize)
-        {
-            Play(g_Low, g_LowVol, true, nullptr, false);
-            static int lows = 0; if (lows < 6) { ++lows; LOGI("low ammo cue (clip=%d)", clip); }
-        }
+        if (!bk->low.empty() && clip >= 1 && clip * 100 < g_LowPct * bk->clip)
+            Play(bk->low, g_LowVol, true, nullptr, false);
     }
     else if (g_LogCount < 12)
     {
@@ -394,22 +395,21 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
 
 static void WeaponReload_hook(void* self, int type, void* ent, int ev)
 {
-    if (!g_Enabled || type != AK || !ent || !g_Loaded) { WeaponReload_orig(self, type, ent, ev); return; }
+    Bank* bk = FindBank(type);
+    if (!g_Enabled || !bk || !ent || !g_Loaded) { WeaponReload_orig(self, type, ent, ev); return; }
     bool player = g_FindPlayerPed && ent == g_FindPlayerPed(0);
     float pos[3]; EntityPos(ent, pos);
-    bool second = (ev != 0x92);   // 0x92 = first sound (mag out), 0x93 = second (mag in)
+    bool second = (ev != 0x92);   // 0x92 = first sound, 0x93 = second
     if (g_ReloadSwap) second = !second;
-    LOGI("reload event=%d (0x%x) -> %s", ev, ev, second ? "reload_two" : "reload_one");
-    if (second) Play(g_Reload2, g_ReloadVol, player, pos, false);
-    else        Play(g_Reload1, g_ReloadVol, player, pos, false);
-    g_LastClip = -1; g_LowDone = false;
+    LOGI("reload %s event=%d (0x%x) -> %s", bk->folder, ev, ev, second ? "reload_two" : "reload_one");
+    Play(second ? bk->r2 : bk->r1, g_ReloadVol, player, pos, false);
 }
 
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
 {
     g_Dir = DetectDir();
     mkdir(g_Dir.c_str(), 0777);
-    mkdir((g_Dir + "AK47").c_str(), 0777);
+    for (int i = 0; i < NBANKS; ++i) mkdir((g_Dir + g_Banks[i].folder).c_str(), 0777);
     g_Log = fopen((g_Dir + "log.txt").c_str(), "w");
     if (!g_Log) g_Log = fopen("/storage/emulated/0/Download/EarShot_log.txt", "w");
     LOGI("EarShot OnModLoad, dir=%s", g_Dir.c_str());
