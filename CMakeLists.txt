@@ -34,3 +34,10 @@ target_include_directories(SleekMove PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(SleekMove PRIVATE -O2 -Wno-unused-function)
 target_link_libraries(SleekMove log dl m)
+
+# --- EarShot (weapon sounds, phase 1: AK-47) ---
+add_library(EarShot SHARED main_earshot.cpp ${AML_SOURCES})
+target_include_directories(EarShot PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(EarShot PRIVATE -O2 -Wno-unused-function)
+target_link_libraries(EarShot log dl m)
