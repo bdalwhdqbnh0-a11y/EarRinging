@@ -1,5 +1,6 @@
 // EarShot Android (phase 1: AK-47) - replaces the AK-47 gun sounds with EarShot wavs, played through the game's own OpenAL.
 #include <mod/amlmod.h>
+#include <mod/config.h>
 #include <mod/logger.h>
 
 #include <android/log.h>
