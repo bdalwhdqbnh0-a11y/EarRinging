@@ -21,6 +21,8 @@
 #include <ctime>
 #include <mutex>
 #include <string>
+#include <strings.h>
+#include <pthread.h>
 #include <thread>
 #include <vector>
 
