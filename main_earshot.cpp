@@ -229,6 +229,7 @@ static bool LoadWav(const std::string& path, Snd& out)
         p += 8 + len + (len & 1);
     }
     if (!pcm || fmt != 1 || bits != 16 || (ch != 1 && ch != 2)) { LOGE("unsupported wav %s (fmt=%d ch=%d bits=%d)", path.c_str(), fmt, ch, bits); return false; }
+    if (pcmLen < 256) { LOGE("empty wav skipped: %s", path.c_str()); return false; }
     alGenBuffers_(1, &out.buf);
     alBufferData_(out.buf, ch == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16, pcm, pcmLen & ~3u, rate);
     out.mono = (ch == 1);
@@ -262,6 +263,7 @@ static Bank g_Banks[] = {
     { 28, "MicroUzi",   50 },
     { 29, "MP5",        30 },
     { 22, "Pistol",     17 },
+    { 26, "SawedOff",    2 },
 };
 static const int NBANKS = sizeof(g_Banks) / sizeof(g_Banks[0]);
 static Bank* FindBank(int type) { for (int i = 0; i < NBANKS; ++i) if (g_Banks[i].type == type) return &g_Banks[i]; return nullptr; }
