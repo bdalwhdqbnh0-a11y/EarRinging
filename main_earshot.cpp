@@ -256,6 +256,7 @@ struct Bank { int type; const char* folder; int clip; std::vector<Snd> shoot, af
 static Bank g_Banks[] = {
     { 30, "AK47",      30 },
     { 25, "Chromegun",  1 },
+    { 33, "Cuntgun",    1 },
 };
 static const int NBANKS = sizeof(g_Banks) / sizeof(g_Banks[0]);
 static Bank* FindBank(int type) { for (int i = 0; i < NBANKS; ++i) if (g_Banks[i].type == type) return &g_Banks[i]; return nullptr; }
@@ -402,7 +403,8 @@ static void WeaponReload_hook(void* self, int type, void* ent, int ev)
     bool second = (ev != 0x92);   // 0x92 = first sound, 0x93 = second
     if (g_ReloadSwap) second = !second;
     LOGI("reload %s event=%d (0x%x) -> %s", bk->folder, ev, ev, second ? "reload_two" : "reload_one");
-    Play(second ? bk->r2 : bk->r1, g_ReloadVol, player, pos, false);
+    const std::vector<Snd>& want = second ? bk->r2 : bk->r1;
+    Play(!want.empty() ? want : (second ? bk->r1 : bk->r2), g_ReloadVol, player, pos, false);   // falls back to the other sound if the folder has only one
 }
 
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
