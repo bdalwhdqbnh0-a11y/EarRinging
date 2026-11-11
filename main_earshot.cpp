@@ -149,6 +149,7 @@ static float g_Volume = 1.0f, g_ShootVol = 1.0f, g_AfterVol = 0.8f, g_ReloadVol 
 static float g_PitchJitter = 0.03f;
 static int   g_AfterDelayMs = 250;
 static int   g_LowAmmoAt = 8;
+static int   g_LowPct = 33;
 static int   g_ClipSize = 30;
 static float g_RefDist = 12.f, g_MaxDist = 250.f, g_Rolloff = 1.0f;
 static int   g_ReloadSwap = 0;
@@ -182,6 +183,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "LowAmmoVolume")) g_LowVol = atof(v);
         else if (!strcasecmp(k, "AfterDelayMs")) g_AfterDelayMs = atoi(v);
         else if (!strcasecmp(k, "LowAmmoAt")) g_LowAmmoAt = atoi(v);
+        else if (!strcasecmp(k, "LowAmmoPercent")) g_LowPct = atoi(v);
         else if (!strcasecmp(k, "ClipSize")) g_ClipSize = atoi(v);
         else if (!strcasecmp(k, "PitchJitter")) g_PitchJitter = atof(v);
         else if (!strcasecmp(k, "RefDist")) g_RefDist = atof(v);
@@ -376,14 +378,11 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
     {
         int t = -1; int clip = PedClip(ent, &t);
         if (g_LogCount < 12) { LOGI("fire: player clip=%d wtype=%d", clip, t); ++g_LogCount; }
-        // clip is read while the shot is being fired; warn once per magazine when it reaches LowAmmoAt
-        if (clip > g_LowAmmoAt) g_LowDone = false;
-        if (clip >= 0 && clip <= g_LowAmmoAt && !g_LowDone)
+        // CS:GO style cue: once the magazine falls below LowAmmoPercent of its size, low_ammo.wav is layered on every shot
+        if (clip >= 1 && clip * 100 < g_LowPct * g_ClipSize)
         {
-            g_LowDone = true;
-            std::lock_guard<std::mutex> lk(g_Mtx);
-            g_LowDue = NowMs() + g_LowDelayMs;
-            LOGI("low ammo warning (clip=%d)", clip);
+            Play(g_Low, g_LowVol, true, nullptr, false);
+            static int lows = 0; if (lows < 6) { ++lows; LOGI("low ammo cue (clip=%d)", clip); }
         }
     }
     else if (g_LogCount < 12)
