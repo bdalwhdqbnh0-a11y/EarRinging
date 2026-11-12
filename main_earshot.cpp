@@ -150,8 +150,10 @@ static float g_PitchJitter = 0.03f;
 static int   g_AfterDelayMs = 250;
 static int   g_LowAmmoAt = 8;
 static int   g_LowPct = 33;
-static int   g_DryEvent = 0;      // audio event id of the empty-gun click (0 = off); found through the log
-static float g_DryVol = 1.0f;
+static int   g_RicChance = 30;    // % of bullet impacts that get a ricochet sound
+static float g_RicVol = 0.8f;
+static float g_RicMaxDist = 70.f;
+static int   g_RicCooldownMs = 120;
 static int   g_ClipSize = 30;
 static float g_RefDist = 12.f, g_MaxDist = 250.f, g_Rolloff = 1.0f;
 static int   g_ReloadSwap = 0;
@@ -166,7 +168,7 @@ static void LoadConfig()
         if (f)
         {
             fputs("[Settings]\nEnabled=1\nVolume=1.0\nShootVolume=1.0\nAfterVolume=0.8\nReloadVolume=1.0\nLowAmmoVolume=1.0\n"
-                  "DryFireEvent=0\nDryFireVolume=1.0\nAfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
+                  "RicochetChance=30\nRicochetVolume=0.8\nRicochetMaxDist=70\nRicochetCooldownMs=120\nAfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
             fclose(f);
         }
         return;
@@ -186,8 +188,10 @@ static void LoadConfig()
         else if (!strcasecmp(k, "AfterDelayMs")) g_AfterDelayMs = atoi(v);
         else if (!strcasecmp(k, "LowAmmoAt")) g_LowAmmoAt = atoi(v);
         else if (!strcasecmp(k, "LowAmmoPercent")) g_LowPct = atoi(v);
-        else if (!strcasecmp(k, "DryFireEvent")) g_DryEvent = atoi(v);
-        else if (!strcasecmp(k, "DryFireVolume")) g_DryVol = atof(v);
+        else if (!strcasecmp(k, "RicochetChance")) g_RicChance = atoi(v);
+        else if (!strcasecmp(k, "RicochetVolume")) g_RicVol = atof(v);
+        else if (!strcasecmp(k, "RicochetMaxDist")) g_RicMaxDist = atof(v);
+        else if (!strcasecmp(k, "RicochetCooldownMs")) g_RicCooldownMs = atoi(v);
         else if (!strcasecmp(k, "ClipSize")) g_ClipSize = atoi(v);
         else if (!strcasecmp(k, "PitchJitter")) g_PitchJitter = atof(v);
         else if (!strcasecmp(k, "RefDist")) g_RefDist = atof(v);
@@ -277,11 +281,14 @@ static const int NBANKS = sizeof(g_Banks) / sizeof(g_Banks[0]);
 static Bank* FindBank(int type) { for (int i = 0; i < NBANKS; ++i) if (g_Banks[i].type == type) return &g_Banks[i]; return nullptr; }
 static std::mutex g_Mtx;
 static bool g_Loaded = false;
+static std::vector<Snd> g_Ricochet;
 
 static void EnsureLoaded()
 {
     if (g_Loaded) return;
     g_Loaded = true;
+    LoadSet(g_Dir + "Ricochet/", "ricochet", g_Ricochet);
+    LOGI("ricochet sounds: %d", (int)g_Ricochet.size());
     for (int i = 0; i < NBANKS; ++i)
     {
         Bank& b = g_Banks[i];
@@ -410,23 +417,29 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
 }
 
 
-// every weapon audio event goes through here first: used to log event ids and to replace the empty-gun click
-static void (*AddAudioEvent_orig)(void*, int, int, void*) = nullptr;
-static void AddAudioEvent_hook(void* self, int ev, int type, void* ent)
+
+// bullet hit on the world / an entity: layer a ricochet sound on a fraction of the impacts
+static void (*BulletHit_orig)(void*, void*, unsigned char, float*, float) = nullptr;
+static long long g_LastRic = 0;
+static void BulletHit_hook(void* self, void* ent, unsigned char surface, float* pos, float f)
 {
-    static int seen[64][2]; static int nseen = 0;
-    bool known = false;
-    for (int i = 0; i < nseen; ++i) if (seen[i][0] == ev && seen[i][1] == type) { known = true; break; }
-    if (!known && nseen < 64) { seen[nseen][0] = ev; seen[nseen][1] = type; ++nseen; LOGI("audio event %d (0x%x) weapon type %d", ev, ev, type); }
-    Bank* bk = FindBank(type);
-    if (g_Enabled && g_DryEvent && ev == g_DryEvent && bk && ent && g_Loaded && !bk->low.empty())
+    BulletHit_orig(self, ent, surface, pos, f);
+    if (!g_Enabled || !g_Loaded || g_Ricochet.empty() || !pos || g_RicChance <= 0) return;
+    if (ent && (*(uint8_t*)((uint8_t*)ent + 0x5a) & 7) == 3) return;     // pedestrians: no ricochet
+    if (surface == 39) return;                                              // water splash
+    if ((rand() % 100) >= g_RicChance) return;
+    long long now = NowMs();
+    if (now - g_LastRic < g_RicCooldownMs) return;
+    void* pl = g_FindPlayerPed ? g_FindPlayerPed(0) : nullptr;
+    if (pl)
     {
-        bool player = g_FindPlayerPed && ent == g_FindPlayerPed(0);
-        float pos[3]; EntityPos(ent, pos);
-        Play(bk->low, g_DryVol, player, pos, false);
-        return;
+        float pp[3]; EntityPos(pl, pp);
+        float dx = pos[0] - pp[0], dy = pos[1] - pp[1], dz = pos[2] - pp[2];
+        if (dx * dx + dy * dy + dz * dz > g_RicMaxDist * g_RicMaxDist) return;
     }
-    AddAudioEvent_orig(self, ev, type, ent);
+    g_LastRic = now;
+    float p3[3] = { pos[0], pos[1], pos[2] };
+    Play(g_Ricochet, g_RicVol, false, p3, true);
 }
 
 static void WeaponReload_hook(void* self, int type, void* ent, int ev)
@@ -446,6 +459,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
 {
     g_Dir = DetectDir();
     mkdir(g_Dir.c_str(), 0777);
+    mkdir((g_Dir + "Ricochet").c_str(), 0777);
     for (int i = 0; i < NBANKS; ++i) mkdir((g_Dir + g_Banks[i].folder).c_str(), 0777);
     g_Log = fopen((g_Dir + "log.txt").c_str(), "w");
     if (!g_Log) g_Log = fopen("/storage/emulated/0/Download/EarShot_log.txt", "w");
@@ -472,7 +486,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     Install("_ZN20CAEWeaponAudioEntity10WeaponFireE11eWeaponTypeP9CPhysicali", (void*)WeaponFire_hook, &WeaponFire_orig);
     Install("_ZN20CAEWeaponAudioEntity12WeaponReloadE11eWeaponTypeP9CPhysicali", (void*)WeaponReload_hook, &WeaponReload_orig);
     g_Run = true;
-    Install("_ZN26CAEGlobalWeaponAudioEntity13AddAudioEventEi11eWeaponTypeP9CPhysical", (void*)AddAudioEvent_hook, &AddAudioEvent_orig);
+    Install("_ZN12CAudioEngine15ReportBulletHitEP7CEntityhR7CVectorf", (void*)BulletHit_hook, &BulletHit_orig);
     Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
     // wavs are decoded on the first shot's thread-safe path below (needs the game's OpenAL context)
     std::thread([] {
