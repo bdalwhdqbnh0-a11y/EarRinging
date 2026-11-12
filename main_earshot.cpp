@@ -150,6 +150,8 @@ static float g_PitchJitter = 0.03f;
 static int   g_AfterDelayMs = 250;
 static int   g_LowAmmoAt = 8;
 static int   g_LowPct = 33;
+static int   g_DryEvent = 0;      // audio event id of the empty-gun click (0 = off); found through the log
+static float g_DryVol = 1.0f;
 static int   g_ClipSize = 30;
 static float g_RefDist = 12.f, g_MaxDist = 250.f, g_Rolloff = 1.0f;
 static int   g_ReloadSwap = 0;
@@ -164,7 +166,7 @@ static void LoadConfig()
         if (f)
         {
             fputs("[Settings]\nEnabled=1\nVolume=1.0\nShootVolume=1.0\nAfterVolume=0.8\nReloadVolume=1.0\nLowAmmoVolume=1.0\n"
-                  "AfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
+                  "DryFireEvent=0\nDryFireVolume=1.0\nAfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
             fclose(f);
         }
         return;
@@ -184,6 +186,8 @@ static void LoadConfig()
         else if (!strcasecmp(k, "AfterDelayMs")) g_AfterDelayMs = atoi(v);
         else if (!strcasecmp(k, "LowAmmoAt")) g_LowAmmoAt = atoi(v);
         else if (!strcasecmp(k, "LowAmmoPercent")) g_LowPct = atoi(v);
+        else if (!strcasecmp(k, "DryFireEvent")) g_DryEvent = atoi(v);
+        else if (!strcasecmp(k, "DryFireVolume")) g_DryVol = atof(v);
         else if (!strcasecmp(k, "ClipSize")) g_ClipSize = atoi(v);
         else if (!strcasecmp(k, "PitchJitter")) g_PitchJitter = atof(v);
         else if (!strcasecmp(k, "RefDist")) g_RefDist = atof(v);
@@ -405,6 +409,26 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
     }
 }
 
+
+// every weapon audio event goes through here first: used to log event ids and to replace the empty-gun click
+static void (*AddAudioEvent_orig)(void*, int, int, void*) = nullptr;
+static void AddAudioEvent_hook(void* self, int ev, int type, void* ent)
+{
+    static int seen[64][2]; static int nseen = 0;
+    bool known = false;
+    for (int i = 0; i < nseen; ++i) if (seen[i][0] == ev && seen[i][1] == type) { known = true; break; }
+    if (!known && nseen < 64) { seen[nseen][0] = ev; seen[nseen][1] = type; ++nseen; LOGI("audio event %d (0x%x) weapon type %d", ev, ev, type); }
+    Bank* bk = FindBank(type);
+    if (g_Enabled && g_DryEvent && ev == g_DryEvent && bk && ent && g_Loaded && !bk->low.empty())
+    {
+        bool player = g_FindPlayerPed && ent == g_FindPlayerPed(0);
+        float pos[3]; EntityPos(ent, pos);
+        Play(bk->low, g_DryVol, player, pos, false);
+        return;
+    }
+    AddAudioEvent_orig(self, ev, type, ent);
+}
+
 static void WeaponReload_hook(void* self, int type, void* ent, int ev)
 {
     Bank* bk = FindBank(type);
@@ -448,6 +472,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     Install("_ZN20CAEWeaponAudioEntity10WeaponFireE11eWeaponTypeP9CPhysicali", (void*)WeaponFire_hook, &WeaponFire_orig);
     Install("_ZN20CAEWeaponAudioEntity12WeaponReloadE11eWeaponTypeP9CPhysicali", (void*)WeaponReload_hook, &WeaponReload_orig);
     g_Run = true;
+    Install("_ZN26CAEGlobalWeaponAudioEntity13AddAudioEventEi11eWeaponTypeP9CPhysical", (void*)AddAudioEvent_hook, &AddAudioEvent_orig);
     Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
     // wavs are decoded on the first shot's thread-safe path below (needs the game's OpenAL context)
     std::thread([] {
