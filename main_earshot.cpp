@@ -157,7 +157,11 @@ static int   g_RicCooldownMs = 120;
 static float g_DistMin = 60.f;      // enemies farther than this play the muffled "distant" shot
 static float g_DistMax = 450.f;     // beyond this nothing is heard
 static float g_DistVol = 1.0f;
-static int   g_DistDelay = 1;       // delay the sound by distance / speed of sound
+static int   g_DistDelay = 1;
+static int   g_DryClicks = 3;       // trigger clicks after the last round of the magazine (0 = off)
+static int   g_DryDelayMs = 220;
+static int   g_DryGapMs = 170;
+static float g_DryVol = 1.0f;       // delay the sound by distance / speed of sound
 static int   g_ClipSize = 30;
 static float g_RefDist = 12.f, g_MaxDist = 250.f, g_Rolloff = 1.0f;
 static int   g_ReloadSwap = 0;
@@ -172,7 +176,7 @@ static void LoadConfig()
         if (f)
         {
             fputs("[Settings]\nEnabled=1\nVolume=1.0\nShootVolume=1.0\nAfterVolume=0.8\nReloadVolume=1.0\nLowAmmoVolume=1.0\n"
-                  "DistantMin=60\nDistantMax=450\nDistantVolume=1.0\nDistantDelay=1\nRicochetChance=30\nRicochetVolume=0.8\nRicochetMaxDist=70\nRicochetCooldownMs=120\nAfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
+                  "DryClicks=3\nDryDelayMs=220\nDryGapMs=170\nDryVolume=1.0\nDistantMin=60\nDistantMax=450\nDistantVolume=1.0\nDistantDelay=1\nRicochetChance=30\nRicochetVolume=0.8\nRicochetMaxDist=70\nRicochetCooldownMs=120\nAfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
             fclose(f);
         }
         return;
@@ -192,6 +196,10 @@ static void LoadConfig()
         else if (!strcasecmp(k, "AfterDelayMs")) g_AfterDelayMs = atoi(v);
         else if (!strcasecmp(k, "LowAmmoAt")) g_LowAmmoAt = atoi(v);
         else if (!strcasecmp(k, "LowAmmoPercent")) g_LowPct = atoi(v);
+        else if (!strcasecmp(k, "DryClicks")) g_DryClicks = atoi(v);
+        else if (!strcasecmp(k, "DryDelayMs")) g_DryDelayMs = atoi(v);
+        else if (!strcasecmp(k, "DryGapMs")) g_DryGapMs = atoi(v);
+        else if (!strcasecmp(k, "DryVolume")) g_DryVol = atof(v);
         else if (!strcasecmp(k, "DistantMin")) g_DistMin = atof(v);
         else if (!strcasecmp(k, "DistantMax")) g_DistMax = atof(v);
         else if (!strcasecmp(k, "DistantVolume")) g_DistVol = atof(v);
@@ -289,13 +297,15 @@ static const int NBANKS = sizeof(g_Banks) / sizeof(g_Banks[0]);
 static Bank* FindBank(int type) { for (int i = 0; i < NBANKS; ++i) if (g_Banks[i].type == type) return &g_Banks[i]; return nullptr; }
 static std::mutex g_Mtx;
 static bool g_Loaded = false;
-static std::vector<Snd> g_Ricochet;
+static std::vector<Snd> g_Ricochet, g_Dry;
 
 static void EnsureLoaded()
 {
     if (g_Loaded) return;
     g_Loaded = true;
     LoadSet(g_Dir + "Ricochet/", "ricochet", g_Ricochet);
+    LoadSet(g_Dir + "Dryfire/", "dryfire", g_Dry);
+    LOGI("dryfire sounds: %d", (int)g_Dry.size());
     LOGI("ricochet sounds: %d", (int)g_Ricochet.size());
     for (int i = 0; i < NBANKS; ++i)
     {
@@ -361,7 +371,7 @@ static long long NowMs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); retur
 
 // runs on the game thread every frame (hook on CTimer::Update)
 static void (*TimerUpdate_orig)() = nullptr;
-struct Delayed { long long due; Bank* bank; float pos[3]; float gain; };
+struct Delayed { long long due; Bank* bank; float pos[3]; float gain; int kind; };   // kind 0 = distant shot, 1 = dry click
 static std::vector<Delayed> g_Delayed;
 
 static void Tick()
@@ -379,7 +389,11 @@ static void Tick()
         for (size_t i = 0; i < g_Delayed.size();)
             if (now >= g_Delayed[i].due) { due.push_back(g_Delayed[i]); g_Delayed.erase(g_Delayed.begin() + i); } else ++i;
     }
-    for (auto& d : due) Play(d.bank->dist, d.gain, false, d.pos, true, 0.15f, 40.f, g_DistMax + 100.f);
+    for (auto& d : due)
+    {
+        if (d.kind == 1) Play(g_Dry, d.gain, true, nullptr, true);
+        else Play(d.bank->dist, d.gain, false, d.pos, true, 0.15f, 40.f, g_DistMax + 100.f);
+    }
 }
 static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Loaded) Tick(); }
 
@@ -427,7 +441,7 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
             if (d > g_DistMin)
             {
                 float fall = 1.0f - 0.6f * (d - g_DistMin) / (g_DistMax - g_DistMin);
-                Delayed dl; dl.bank = bk; dl.gain = g_DistVol * fall; memcpy(dl.pos, pos, sizeof(pos));
+                Delayed dl; dl.kind = 0; dl.bank = bk; dl.gain = g_DistVol * fall; memcpy(dl.pos, pos, sizeof(pos));
                 dl.due = NowMs() + (g_DistDelay ? (long long)(d / 343.f * 1000.f) : 0);
                 std::lock_guard<std::mutex> lk(g_Mtx);
                 if (g_Delayed.size() < 32) g_Delayed.push_back(dl);
@@ -445,6 +459,17 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
     {
         int t = -1; int clip = PedClip(ent, &t);
         if (g_LogCount < 12) { LOGI("fire: %s player clip=%d wtype=%d", bk->folder, clip, t); ++g_LogCount; }
+        // the last round of the magazine was just fired: a few dry trigger clicks tell the player the gun is empty
+        if (g_DryClicks > 0 && clip == 1 && bk->clip >= 7 && !g_Dry.empty())
+        {
+            std::lock_guard<std::mutex> lk(g_Mtx);
+            for (int i = 0; i < g_DryClicks && g_Delayed.size() < 32; ++i)
+            {
+                Delayed dl; dl.kind = 1; dl.bank = bk; dl.gain = g_DryVol; dl.pos[0] = dl.pos[1] = dl.pos[2] = 0;
+                dl.due = NowMs() + g_DryDelayMs + (long long)i * g_DryGapMs;
+                g_Delayed.push_back(dl);
+            }
+        }
         // CS:GO style cue: once the magazine falls below LowAmmoPercent of its size, low_ammo.wav is layered on every shot
         if (!bk->low.empty() && clip >= 1 && clip * 100 < g_LowPct * bk->clip)
             Play(bk->low, g_LowVol, true, nullptr, false);
@@ -500,6 +525,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_Dir = DetectDir();
     mkdir(g_Dir.c_str(), 0777);
     mkdir((g_Dir + "Ricochet").c_str(), 0777);
+    mkdir((g_Dir + "Dryfire").c_str(), 0777);
     for (int i = 0; i < NBANKS; ++i) mkdir((g_Dir + g_Banks[i].folder).c_str(), 0777);
     g_Log = fopen((g_Dir + "log.txt").c_str(), "w");
     if (!g_Log) g_Log = fopen("/storage/emulated/0/Download/EarShot_log.txt", "w");
