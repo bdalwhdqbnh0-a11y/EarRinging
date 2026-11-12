@@ -154,6 +154,10 @@ static int   g_RicChance = 30;    // % of bullet impacts that get a ricochet sou
 static float g_RicVol = 0.8f;
 static float g_RicMaxDist = 70.f;
 static int   g_RicCooldownMs = 120;
+static float g_DistMin = 60.f;      // enemies farther than this play the muffled "distant" shot
+static float g_DistMax = 450.f;     // beyond this nothing is heard
+static float g_DistVol = 1.0f;
+static int   g_DistDelay = 1;       // delay the sound by distance / speed of sound
 static int   g_ClipSize = 30;
 static float g_RefDist = 12.f, g_MaxDist = 250.f, g_Rolloff = 1.0f;
 static int   g_ReloadSwap = 0;
@@ -168,7 +172,7 @@ static void LoadConfig()
         if (f)
         {
             fputs("[Settings]\nEnabled=1\nVolume=1.0\nShootVolume=1.0\nAfterVolume=0.8\nReloadVolume=1.0\nLowAmmoVolume=1.0\n"
-                  "RicochetChance=30\nRicochetVolume=0.8\nRicochetMaxDist=70\nRicochetCooldownMs=120\nAfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
+                  "DistantMin=60\nDistantMax=450\nDistantVolume=1.0\nDistantDelay=1\nRicochetChance=30\nRicochetVolume=0.8\nRicochetMaxDist=70\nRicochetCooldownMs=120\nAfterDelayMs=250\nLowAmmoAt=8\nClipSize=30\nPitchJitter=0.03\nRefDist=12\nMaxDist=250\nRolloff=1.0\nReloadSwap=0\n", f);
             fclose(f);
         }
         return;
@@ -188,6 +192,10 @@ static void LoadConfig()
         else if (!strcasecmp(k, "AfterDelayMs")) g_AfterDelayMs = atoi(v);
         else if (!strcasecmp(k, "LowAmmoAt")) g_LowAmmoAt = atoi(v);
         else if (!strcasecmp(k, "LowAmmoPercent")) g_LowPct = atoi(v);
+        else if (!strcasecmp(k, "DistantMin")) g_DistMin = atof(v);
+        else if (!strcasecmp(k, "DistantMax")) g_DistMax = atof(v);
+        else if (!strcasecmp(k, "DistantVolume")) g_DistVol = atof(v);
+        else if (!strcasecmp(k, "DistantDelay")) g_DistDelay = atoi(v);
         else if (!strcasecmp(k, "RicochetChance")) g_RicChance = atoi(v);
         else if (!strcasecmp(k, "RicochetVolume")) g_RicVol = atof(v);
         else if (!strcasecmp(k, "RicochetMaxDist")) g_RicMaxDist = atof(v);
@@ -261,7 +269,7 @@ static void LoadSet(const std::string& dir, const char* base, std::vector<Snd>& 
 }
 
 // ---------------------------------------------------------------- weapon sound banks
-struct Bank { int type; const char* folder; int clip; std::vector<Snd> shoot, after, r1, r2, low; };
+struct Bank { int type; const char* folder; int clip; std::vector<Snd> shoot, after, r1, r2, low, dist; };
 static Bank g_Banks[] = {
     { 30, "AK47",      30 },
     { 25, "Chromegun",  1 },
@@ -272,9 +280,9 @@ static Bank g_Banks[] = {
     { 29, "MP5",        30 },
     { 22, "Pistol",     17 },
     { 26, "SawedOff",    2 },
-    { 23, "Silenced",   17 },
+    { 23, "Silenced",    7 },
     { 34, "Sniper",      1 },
-    { 27, "SPAS12",      7 },
+    { 27, "SPAS12",      8 },
     { 32, "Tec9",       50 },
 };
 static const int NBANKS = sizeof(g_Banks) / sizeof(g_Banks[0]);
@@ -298,6 +306,7 @@ static void EnsureLoaded()
         LoadSet(d, "reload_one", b.r1);
         LoadSet(d, "reload_two", b.r2);
         LoadSet(d, "low_ammo", b.low);
+        LoadSet(d, "distant", b.dist);
         LOGI("%s sounds: shoot=%d after=%d reload_one=%d reload_two=%d low_ammo=%d (dir %s)", b.folder,
              (int)b.shoot.size(), (int)b.after.size(), (int)b.r1.size(), (int)b.r2.size(), (int)b.low.size(), d.c_str());
     }
@@ -309,7 +318,7 @@ static bool g_SrcInit = false;
 
 static float Rnd() { return (float)(rand() & 0xFFFF) / 65535.f; }
 
-static void Play(const std::vector<Snd>& set, float gain, bool relative, const float* pos, bool jitter)
+static void Play(const std::vector<Snd>& set, float gain, bool relative, const float* pos, bool jitter, float roll = -1.f, float ref = -1.f, float maxd = -1.f)
 {
     if (set.empty()) return;
     const Snd& s = set[rand() % set.size()];
@@ -336,9 +345,9 @@ static void Play(const std::vector<Snd>& set, float gain, bool relative, const f
     alSourcei_(src, AL_SOURCE_RELATIVE, relative ? 1 : 0);
     if (relative || !pos) alSource3f_(src, AL_POSITION, 0.f, 0.f, 0.f);
     else alSource3f_(src, AL_POSITION, pos[0], pos[1], pos[2]);
-    alSourcef_(src, AL_REFERENCE_DISTANCE, relative ? 1000.f : g_RefDist);
-    alSourcef_(src, AL_MAX_DISTANCE, g_MaxDist);
-    alSourcef_(src, AL_ROLLOFF_FACTOR, relative ? 0.f : g_Rolloff);
+    alSourcef_(src, AL_REFERENCE_DISTANCE, relative ? 1000.f : (ref > 0 ? ref : g_RefDist));
+    alSourcef_(src, AL_MAX_DISTANCE, maxd > 0 ? maxd : g_MaxDist);
+    alSourcef_(src, AL_ROLLOFF_FACTOR, relative ? 0.f : (roll >= 0 ? roll : g_Rolloff));
     alSourcePlay_(src);
     static int plays = 0;
     if (plays < 60) { ++plays; LOGI("play buf=%u src=%u slot=%d gain=%.2f rel=%d err=0x%x", s.buf, src, idx, gain * g_Volume, (int)relative, alGetError_()); }
@@ -352,6 +361,9 @@ static long long NowMs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); retur
 
 // runs on the game thread every frame (hook on CTimer::Update)
 static void (*TimerUpdate_orig)() = nullptr;
+struct Delayed { long long due; Bank* bank; float pos[3]; float gain; };
+static std::vector<Delayed> g_Delayed;
+
 static void Tick()
 {
     Pending p; bool fire = false;
@@ -360,6 +372,14 @@ static void Tick()
         if (g_Pend.on && NowMs() >= g_Pend.due) { p = g_Pend; g_Pend.on = false; fire = true; }
     }
     if (fire && p.bank) Play(p.bank->after, g_AfterVol, p.rel, p.pos, true);
+    std::vector<Delayed> due;
+    {
+        std::lock_guard<std::mutex> lk(g_Mtx);
+        long long now = NowMs();
+        for (size_t i = 0; i < g_Delayed.size();)
+            if (now >= g_Delayed[i].due) { due.push_back(g_Delayed[i]); g_Delayed.erase(g_Delayed.begin() + i); } else ++i;
+    }
+    for (auto& d : due) Play(d.bank->dist, d.gain, false, d.pos, true, 0.15f, 40.f, g_DistMax + 100.f);
 }
 static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Loaded) Tick(); }
 
@@ -395,6 +415,26 @@ static void WeaponFire_hook(void* self, int type, void* ent, int vol)
     if (!g_Enabled || !bk || !ent || !g_Loaded || bk->shoot.empty()) { WeaponFire_orig(self, type, ent, vol); return; }
     bool player = g_FindPlayerPed && ent == g_FindPlayerPed(0);
     float pos[3]; EntityPos(ent, pos);
+    if (!player && !bk->dist.empty() && g_FindPlayerPed)
+    {
+        void* pl = g_FindPlayerPed(0);
+        if (pl)
+        {
+            float pp[3]; EntityPos(pl, pp);
+            float dx = pos[0] - pp[0], dy = pos[1] - pp[1], dz = pos[2] - pp[2];
+            float d = sqrtf(dx * dx + dy * dy + dz * dz);
+            if (d > g_DistMax) return;                                   // too far to hear
+            if (d > g_DistMin)
+            {
+                float fall = 1.0f - 0.6f * (d - g_DistMin) / (g_DistMax - g_DistMin);
+                Delayed dl; dl.bank = bk; dl.gain = g_DistVol * fall; memcpy(dl.pos, pos, sizeof(pos));
+                dl.due = NowMs() + (g_DistDelay ? (long long)(d / 343.f * 1000.f) : 0);
+                std::lock_guard<std::mutex> lk(g_Mtx);
+                if (g_Delayed.size() < 32) g_Delayed.push_back(dl);
+                return;
+            }
+        }
+    }
     Play(bk->shoot, g_ShootVol, player, pos, true);
     {
         std::lock_guard<std::mutex> lk(g_Mtx);
