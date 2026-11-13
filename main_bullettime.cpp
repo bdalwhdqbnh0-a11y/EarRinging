@@ -209,8 +209,13 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 140;
 static float g_DiveAnimBlend = 8.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 4500;
+static float g_DiveWorld = 0.15f, g_DiveCJ = 0.35f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
+static int   g_AutoAim = 1, g_TurnToTarget = 1;
+static float g_AimRange = 35.f, g_AimCone = 80.f;
+static int   g_CamRear = 1, g_CamSwitch = 1;
+static float g_CamDist = 2.6f, g_CamHeight = 0.7f, g_CamSide = 0.6f, g_CamLook = 10.f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
-static float g_DPos[3] = {0,0,0};
+static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
 
 static void LoadConfig()
@@ -267,6 +272,19 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveAnimBlend")) g_DiveAnimBlend = (float)atof(v);
         else if (!strcasecmp(k, "LandSlide")) g_LandSlide = (float)atof(v);
         else if (!strcasecmp(k, "DiveVolume")) g_DiveVol = (float)atof(v);
+        else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
+        else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
+        else if (!strcasecmp(k, "DiveMaxDist")) g_DiveMaxDist = (float)atof(v);
+        else if (!strcasecmp(k, "AutoAim")) g_AutoAim = atoi(v);
+        else if (!strcasecmp(k, "TurnToTarget")) g_TurnToTarget = atoi(v);
+        else if (!strcasecmp(k, "AimRange")) g_AimRange = (float)atof(v);
+        else if (!strcasecmp(k, "AimCone")) g_AimCone = (float)atof(v);
+        else if (!strcasecmp(k, "CameraRear")) g_CamRear = atoi(v);
+        else if (!strcasecmp(k, "CameraSwitch")) g_CamSwitch = atoi(v);
+        else if (!strcasecmp(k, "CameraDistance")) g_CamDist = (float)atof(v);
+        else if (!strcasecmp(k, "CameraHeight")) g_CamHeight = (float)atof(v);
+        else if (!strcasecmp(k, "CameraSide")) g_CamSide = (float)atof(v);
+        else if (!strcasecmp(k, "CameraSmooth")) g_CamSmooth = (float)atof(v);
         else if (!strcasecmp(k, "DiveGravity")) g_Grav = (float)atof(v);
         else if (!strcasecmp(k, "DiveMaxMs")) g_DiveMaxMs = atoi(v);
         else if (!strcasecmp(k, "FireGapMs")) g_FireGapMs = atoi(v);
@@ -429,6 +447,9 @@ static RegisterAnimBlock_t g_RegBlock; static LoadAnimFile_t g_LoadAnim; static 
 static GetBlock_t g_GetBlock; static GetAnim_t g_GetAnim; static BlendAnim_t g_Blend; static GetPad_t g_GetPad;
 static PadBool_t g_JumpDown; static PadAxis_t g_WalkLR, g_WalkUD; static PadWeapon_t g_PadWeapon; static PointGun_t g_PointGun;
 static WeaponFire_t g_WFire; static GetBonePos_t g_GetBone; static FindGroundZ_t g_GroundZ; static uint32_t* g_GameMs;
+typedef bool (*IsAlive_t)(void*);
+static void* g_Tgt = nullptr; static long long g_LastPick = 0;
+static IsAlive_t g_IsAlive = nullptr; static void** g_PedPoolSym = nullptr;
 static void* g_DiveBlock = nullptr;
 static void* g_DiveHier[14];
 static bool  g_DiveLoaded = false;
@@ -487,6 +508,50 @@ static void* FindAssocByHier(void* ped, void* hier)
     return nullptr;
 }
 
+
+// ---- rear camera during a dive: the game's fixed camera mode (same thing the scripts use), position/target rewritten every frame
+typedef void (*TakeNoEnt_t)(void*, const float*, short, int);
+typedef void (*CamFixed_t)(void*, const float*, const float*);
+typedef void (*CamRestore_t)(void*);
+static uint8_t* g_TheCam = nullptr; static TakeNoEnt_t g_CamTake = nullptr; static CamFixed_t g_CamFixed = nullptr; static CamRestore_t g_CamRestore = nullptr;
+static bool g_CamOn = false; static float g_CamP[3] = {0,0,0}; static long long g_CamLast = 0;
+static void CamWanted(void* ped, float* pos, float* look)
+{
+    float* b = PedPos(ped);
+    float hl = sqrtf(g_DAim[0] * g_DAim[0] + g_DAim[1] * g_DAim[1]); float hx = hl > 1e-3f ? g_DAim[0] / hl : g_DFace[0], hy = hl > 1e-3f ? g_DAim[1] / hl : g_DFace[1];
+    pos[0] = b[0] - hx * g_CamDist + hy * g_CamSide; pos[1] = b[1] - hy * g_CamDist - hx * g_CamSide; pos[2] = b[2] + g_CamHeight;
+    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] + 0.4f + g_DAim[2] * g_CamLook;
+}
+static void CamStart(void* ped)
+{
+    if (!g_CamRear || !g_TheCam || !g_CamTake || !g_CamFixed) return;
+    float pos[3], look[3]; CamWanted(ped, pos, look);
+    g_CamP[0] = pos[0]; g_CamP[1] = pos[1]; g_CamP[2] = pos[2];
+    float up[3] = {0,0,0};
+    g_CamTake(g_TheCam, look, (short)g_CamSwitch, 1);
+    g_CamFixed(g_TheCam, pos, up);
+    g_CamOn = true; g_CamLast = NowMs();
+    LOGI("camera: rear camera ON pos=(%.1f,%.1f,%.1f) look=(%.1f,%.1f,%.1f)", pos[0], pos[1], pos[2], look[0], look[1], look[2]);
+}
+static void CamTick(void* ped, long long now)
+{
+    if (!g_CamOn) return;
+    float dt = fminf(0.1f, (now - g_CamLast) / 1000.f); g_CamLast = now;
+    float pos[3], look[3]; CamWanted(ped, pos, look);
+    float a = 1.f - expf(-dt * g_CamSmooth);
+    for (int i = 0; i < 3; ++i) g_CamP[i] += (pos[i] - g_CamP[i]) * a;
+    float up[3] = {0,0,0};
+    g_CamFixed(g_TheCam, g_CamP, up);
+    float* lv = (float*)(g_TheCam + 0x83c); lv[0] = look[0]; lv[1] = look[1]; lv[2] = look[2];
+}
+static void CamStop()
+{
+    if (!g_CamOn) return;
+    g_CamOn = false;
+    if (g_CamRestore) g_CamRestore(g_TheCam);
+    LOGI("camera: restored");
+}
+
 static void StartDive(void* ped)
 {
     if (!g_DiveBlock) { LOGE("dive: animations not loaded"); return; }
@@ -512,21 +577,49 @@ static void StartDive(void* ped)
     if (!h || !clump || !g_Blend) { LOGE("dive: no hierarchy/clump/blend (h=%p clump=%p)", h, clump); return; }
     g_DAssoc = g_Blend(clump, h, g_DiveFlags, g_DiveAnimBlend);
     g_DHv[0] = hv[0] * g_DiveSpeed; g_DHv[1] = hv[1] * g_DiveSpeed;
-    g_DAim[0] = fwd[0]; g_DAim[1] = fwd[1]; g_DAim[2] = 0.f;
+    g_DAim[0] = fwd[0]; g_DAim[1] = fwd[1]; g_DAim[2] = 0.f; g_DFace[0] = fwd[0]; g_DFace[1] = fwd[1]; g_Tgt = nullptr; g_LastPick = 0;
     float* mv = PedMove(ped); mv[0] = mv[1] = mv[2] = 0.f;
     g_DPos[0] = PedPos(ped)[0]; g_DPos[1] = PedPos(ped)[1]; g_DPos[2] = PedPos(ped)[2];
-    g_DVz = g_DiveUp; g_DLastG = g_GameMs ? *g_GameMs : 0;
+    g_DTrav = 0.f; g_DVz = g_DiveUp; g_DLastG = g_GameMs ? *g_GameMs : 0;
     { float gz0 = g_GroundZ ? g_GroundZ(PedPos(ped)[0], PedPos(ped)[1]) : PedPos(ped)[2] - 1.f; g_DOff = PedPos(ped)[2] - gz0; if (g_DOff < 0.6f || g_DOff > 1.6f) g_DOff = 1.f; }
     g_DS = DS_FLY; g_DStart = NowMs(); g_DLand = 0; g_NextFire = 0; g_DShots = 0;
     PlayOn(3, g_Active ? g_DiveBt : g_DiveS, g_DiveVol);
+    CamStart(ped);
     LOGI("dive START dir=%d var=%d slot=%u stick=(%d,%d) anim=%s assoc=%p v=(%.3f,%.3f,%.3f) pos=(%.1f,%.1f,%.1f)", dir, var, slot, lr, ud, kDiveNames[g_DAnim], g_DAssoc,
          mv[0], mv[1], mv[2], PedPos(ped)[0], PedPos(ped)[1], PedPos(ped)[2]);
 }
 
 static void EndDive(void* ped, const char* why)
 {
-    g_DS = DS_NONE;
-    LOGI("dive END (%s) after %lld ms, shots fired=%d", why, NowMs() - g_DStart, g_DShots);
+    g_DS = DS_NONE; CamStop();
+    LOGI("dive END (%s) after %lld ms, shots fired=%d, travelled %.1f m", why, NowMs() - g_DStart, g_DShots, g_DTrav);
+}
+
+
+// nearest living ped inside the aiming cone (chest position returned in out)
+static void* PickTarget(void* ped, const float* org, const float* dir, float* out)
+{
+    if (!g_PedPoolSym || !*g_PedPoolSym || !g_IsAlive) return nullptr;
+    uint8_t* pool = (uint8_t*)*g_PedPoolSym;
+    uint8_t* objs = *(uint8_t**)pool; uint8_t* flags = *(uint8_t**)(pool + 8); int n = *(int*)(pool + 0x10);
+    if (!objs || !flags || n <= 0 || n > 1000) return nullptr;
+    float cosCone = cosf(g_AimCone * 3.14159265f / 180.f);
+    void* best = nullptr; float bd = g_AimRange * g_AimRange;
+    for (int i = 0; i < n; ++i)
+    {
+        if (flags[i] & 0x80) continue;
+        uint8_t* p = objs + (size_t)i * 0x9c8;
+        if (p == (uint8_t*)ped) continue;
+        if (!g_IsAlive(p)) continue;
+        float* pp = PedPos(p);
+        float dx = pp[0] - org[0], dy = pp[1] - org[1], dz = pp[2] + 0.25f - org[2];
+        float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > bd || d2 < 1.f) continue;
+        float dot = (dx * dir[0] + dy * dir[1]) / fmaxf(1e-3f, sqrtf(dx * dx + dy * dy));
+        if (dot < cosCone) continue;
+        bd = d2; best = p; out[0] = pp[0]; out[1] = pp[1]; out[2] = pp[2] + 0.25f;
+    }
+    return best;
 }
 
 static void AirShoot(void* ped, long long nowReal)
@@ -536,7 +629,32 @@ static void AirShoot(void* ped, long long nowReal)
     float org[3] = { 0, 0, 0 };
     float* pos = PedPos(ped);
     if (g_GetBone) g_GetBone(ped, org, 24, false); else { org[0] = pos[0]; org[1] = pos[1]; org[2] = pos[2]; }   // bone 24 = right hand
-    float tgt[3] = { org[0] + g_DAim[0] * 30.f, org[1] + g_DAim[1] * 30.f, org[2] + g_DAim[2] * 30.f };
+    float tgt[3];
+    if (g_AutoAim)
+    {
+        float tp[3];
+        if (nowReal - g_LastPick > 150 || !g_Tgt)
+        {
+            g_LastPick = nowReal;
+            float d0[3] = { g_DFace[0], g_DFace[1], 0 };
+            void* t = PickTarget(ped, org, d0, tp);
+            if (t != g_Tgt) { LOGI("dive: target %p", t); g_Tgt = t; }
+        }
+        if (g_Tgt && g_IsAlive && g_IsAlive(g_Tgt)) { float* pp = PedPos(g_Tgt); tp[0] = pp[0]; tp[1] = pp[1]; tp[2] = pp[2] + 0.25f;
+            float dx = tp[0] - org[0], dy = tp[1] - org[1], dz = tp[2] - org[2]; float L = sqrtf(dx * dx + dy * dy + dz * dz); if (L > 0.1f) { g_DAim[0] = dx / L; g_DAim[1] = dy / L; g_DAim[2] = dz / L; }
+            if (g_TurnToTarget)
+            {
+                float want = atan2f(-dx, dy);
+                float* rc = (float*)(pb + 0x6c4); float* ra = (float*)(pb + 0x6c8);
+                float diff = want - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
+                float nh = *rc + diff * 0.25f; *rc = nh; *ra = nh;
+                float* m = PedMat(ped); if (m) { m[4] = -sinf(nh); m[5] = cosf(nh); m[0] = cosf(nh); m[1] = sinf(nh); }
+            }
+        }
+        else g_Tgt = nullptr;
+    }
+    tgt[0] = org[0] + g_DAim[0] * 30.f; tgt[1] = org[1] + g_DAim[1] * 30.f; tgt[2] = org[2] + g_DAim[2] * 30.f;
+    if (g_AutoAim && g_Tgt) { float* pp = PedPos(g_Tgt); tgt[0] = pp[0]; tgt[1] = pp[1]; tgt[2] = pp[2] + 0.25f; }
     if (g_AirAim && g_PointGun) g_PointGun(pb + 0x678, tgt, 1.0f);
     // 2) fire while the fire button is held
     if (!g_AirFire || !g_WFire || !g_PadWeapon || !g_GetPad) return;
@@ -552,7 +670,7 @@ static void AirShoot(void* ped, long long nowReal)
     int type = *(int*)w, state = *(int*)(w + 4), clip = *(int*)(w + 8);
     if (type <= 0 || clip <= 0 || state != 0) { if (g_DiveLog && dbg < 40) { ++dbg; LOGI("dive: cannot fire type=%d state=%d clip=%d", type, state, clip); } return; }
     float eff[3] = { org[0] + g_DAim[0] * 0.6f, org[1] + g_DAim[1] * 0.6f, org[2] + g_DAim[2] * 0.6f };
-    bool r = g_WFire(w, ped, org, eff, nullptr, tgt, nullptr);
+    bool r = g_WFire(w, ped, org, eff, (g_AutoAim ? g_Tgt : nullptr), tgt, nullptr);
     ++g_DShots; g_NextFire = (long long)gnow + g_FireGapMs;
     if (g_DiveLog && g_DShots <= 12) LOGI("dive: Fire() -> %d  clip %d -> %d state=%d", (int)r, clip, *(int*)(w + 8), *(int*)(w + 4));
 }
@@ -587,12 +705,15 @@ static void DiveTick(void* ped, long long now)
     }
     float* pos = PedPos(ped); float* mv = PedMove(ped);
     long long el = now - g_DStart;
+    CamTick(ped, now);
     uint32_t gnow = g_GameMs ? *g_GameMs : 0;
-    float steps = (gnow - g_DLastG) / 20.f; g_DLastG = gnow;          // game time steps (1 step = 1/50 s, already slowed by the time scale)
+    float steps = (gnow - g_DLastG) / 20.f; g_DLastG = gnow;
+    if (g_Scale < 0.999f) steps *= fminf(g_DiveCJ / g_Scale, 6.f);       // CJ's own clock runs faster than the slowed world (same factor as his animation)          // game time steps (1 step = 1/50 s, already slowed by the time scale)
     if (steps < 0.f || steps > 6.f) steps = 0.f;
     if (g_DS == DS_FLY)
     {
-        g_DPos[0] += g_DHv[0] * steps; g_DPos[1] += g_DHv[1] * steps; g_DPos[2] += g_DVz * steps;   // our own absolute position (physics would snap CJ back)
+        { float dx = g_DHv[0] * steps, dy = g_DHv[1] * steps; if (g_DTrav < g_DiveMaxDist) { g_DPos[0] += dx; g_DPos[1] += dy; g_DTrav += sqrtf(dx * dx + dy * dy); } }
+        g_DPos[2] += g_DVz * steps;   // our own absolute position (physics would snap CJ back)
         g_DVz -= (g_Grav / 2500.f) * steps;                          // m/s^2 -> units per step^2
         float gz = g_GroundZ ? g_GroundZ(g_DPos[0], g_DPos[1]) : g_DPos[2] - g_DOff;
         if (g_DPos[2] - gz < g_DOff) g_DPos[2] = gz + g_DOff;
@@ -606,7 +727,7 @@ static void DiveTick(void* ped, long long now)
     {
         float k = g_LandSlide;                                    // slide on the ground, fading out
         g_DHv[0] *= powf(0.93f, steps); g_DHv[1] *= powf(0.93f, steps);
-        g_DPos[0] += g_DHv[0] * steps * k; g_DPos[1] += g_DHv[1] * steps * k;
+        if (g_DTrav < g_DiveMaxDist) { float dx = g_DHv[0] * steps * k, dy = g_DHv[1] * steps * k; g_DPos[0] += dx; g_DPos[1] += dy; g_DTrav += sqrtf(dx * dx + dy * dy); }
         float gz2 = g_GroundZ ? g_GroundZ(g_DPos[0], g_DPos[1]) : g_DPos[2] - g_DOff; g_DPos[2] = gz2 + g_DOff;
         pos[0] = g_DPos[0]; pos[1] = g_DPos[1]; pos[2] = g_DPos[2]; mv[0] = mv[1] = mv[2] = 0.f;
         if (el < g_DiveMaxMs && g_AirFire && el - (g_DLand - g_DStart) < 700) AirShoot(ped, now);   // still shooting right after landing
@@ -640,7 +761,7 @@ static void Tick()
     else if (g_Refill > 0.f && g_Meter < 1.f) g_Meter = fminf(1.f, g_Meter + g_Refill * dt);
 
     // world speed
-    float target = g_Active ? g_WorldSpeed : 1.f;
+    float target = g_Active ? (g_DS != DS_NONE ? g_DiveWorld : g_WorldSpeed) : 1.f;
     float blend = g_Active ? g_BlendIn : g_BlendOut;
     float f = 1.f - powf(1.f - blend, dt * 30.f);
     g_Scale += (target - g_Scale) * f;
@@ -652,7 +773,7 @@ static void Tick()
     // CJ
     if (ped)
     {
-        if (g_Active && g_Scale < 0.999f) { if (g_TrPed != ped) { g_Tr.clear(); g_TrPed = ped; } ApplyCJSpeed(ped, fminf(g_CJSpeed / g_Scale, 6.f)); }
+        if (g_Active && g_Scale < 0.999f) { if (g_TrPed != ped) { g_Tr.clear(); g_TrPed = ped; } ApplyCJSpeed(ped, fminf((g_DS != DS_NONE ? g_DiveCJ : g_CJSpeed) / g_Scale, 6.f)); }
         else if (!g_Tr.empty()) RestoreCJSpeed(ped);
     }
 
@@ -729,6 +850,14 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     *(void**)&g_WFire = (void*)ResolveExact("_ZN7CWeapon4FireEP7CEntityP7CVectorS3_S1_S3_S3_");
     *(void**)&g_GetBone = (void*)ResolveExact("_ZN4CPed15GetBonePositionER5RwV3djb");
     *(void**)&g_GroundZ = (void*)ResolveExact("_ZN6CWorld19FindGroundZForCoordEff");
+    *(void**)&g_IsAlive = (void*)ResolveExact("_ZNK4CPed7IsAliveEv");
+    g_PedPoolSym = (void**)ResolveExact("_ZN6CPools11ms_pPedPoolE");
+    LOGI("autoaim symbols: isalive=%p pedpool=%p", (void*)g_IsAlive, (void*)g_PedPoolSym);
+    g_TheCam = (uint8_t*)ResolveExact("TheCamera");
+    *(void**)&g_CamTake = (void*)ResolveExact("_ZN7CCamera19TakeControlNoEntityERK7CVectorsi");
+    *(void**)&g_CamFixed = (void*)ResolveExact("_ZN7CCamera26SetCamPositionForFixedModeERK7CVectorS2_");
+    *(void**)&g_CamRestore = (void*)ResolveExact("_ZN7CCamera7RestoreEv");
+    LOGI("camera symbols: cam=%p take=%p fixed=%p restore=%p", (void*)g_TheCam, (void*)g_CamTake, (void*)g_CamFixed, (void*)g_CamRestore);
     g_GameMs = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
     LOGI("dive symbols: reg=%p load=%p open=%p blend=%p getpad=%p jump=%p lr=%p ud=%p padweapon=%p pointgun=%p fire=%p bone=%p ground=%p ms=%p", (void*)g_RegBlock, (void*)g_LoadAnim, (void*)g_StreamOpen, (void*)g_Blend, (void*)g_GetPad, (void*)g_JumpDown, (void*)g_WalkLR, (void*)g_WalkUD, (void*)g_PadWeapon, (void*)g_PointGun, (void*)g_WFire, (void*)g_GetBone, (void*)g_GroundZ, (void*)g_GameMs);
     LOGI("symbols: timescale=%p findplayer=%p assoc=%p/%p screen=%p/%p", (void*)g_TimeScale, (void*)g_FindPlayerPed, (void*)RpFirstAssoc, (void*)RpNextAssoc, (void*)OS_W, (void*)OS_H);
