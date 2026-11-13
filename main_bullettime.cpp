@@ -1,0 +1,469 @@
+// BulletTime Android (phase 1): slow motion with a faster CJ, adrenaline bar and sounds. Inspired by 'Frnchise Bullet Time' (PC) - re-implemented, no code taken from it.
+#include <mod/amlmod.h>
+#include <mod/config.h>
+#include <mod/logger.h>
+
+#include <android/log.h>
+#include <dlfcn.h>
+#include <elf.h>
+#include <link.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+#include <atomic>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <ctime>
+#include <mutex>
+#include <string>
+#include <strings.h>
+#include <pthread.h>
+#include <thread>
+#include <vector>
+
+MYMODCFG(net.bullettime.mod, BulletTime Android, 0.1.0, Custom)
+
+#define TAG "BulletTime"
+static FILE* g_Log = nullptr;
+static void LogF(const char* lvl, const char* fmt, ...)
+{
+    char buf[512];
+    va_list a; va_start(a, fmt); vsnprintf(buf, sizeof(buf), fmt, a); va_end(a);
+    __android_log_print(ANDROID_LOG_INFO, TAG, "%s", buf);
+    if (g_Log) { fprintf(g_Log, "[%s] %s\n", lvl, buf); fflush(g_Log); }
+}
+#define LOGI(...) LogF("I", __VA_ARGS__)
+#define LOGE(...) LogF("E", __VA_ARGS__)
+
+extern "C" __attribute__((visibility("default"))) void OnModLoad();
+static std::string g_Dir;
+
+static std::string GetPackageName()
+{
+    char buf[256] = {0};
+    int fd = open("/proc/self/cmdline", O_RDONLY);
+    if (fd >= 0) { read(fd, buf, sizeof(buf) - 1); close(fd); }
+    return buf[0] ? std::string(buf) : std::string("com.rockstargames.gtasa");
+}
+static std::string DetectDir()
+{
+    std::string unprotected = "/storage/emulated/0/Android_unprotected/data/" + GetPackageName();
+    if (access(unprotected.c_str(), W_OK) == 0) return unprotected + "/BulletTime/";
+    Dl_info info;
+    if (dladdr((void*)&OnModLoad, &info) && info.dli_fname)
+    {
+        std::string p = info.dli_fname;
+        size_t pos = p.rfind("/mods");
+        if (pos != std::string::npos) return p.substr(0, pos) + "/BulletTime/";
+    }
+    return "/storage/emulated/0/Android/data/" + GetPackageName() + "/files/BulletTime/";
+}
+
+static uintptr_t ResolveExact(const char* name)
+{
+    struct Ctx { std::string path; uintptr_t bias = 0; } ctx;
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
+        Ctx* c = (Ctx*)data;
+        if (info->dlpi_name && strstr(info->dlpi_name, "libGTASA.so"))
+        { c->path = info->dlpi_name; c->bias = info->dlpi_addr; return 1; }
+        return 0;
+    }, &ctx);
+    if (ctx.path.empty()) return 0;
+    int fd = open(ctx.path.c_str(), O_RDONLY);
+    if (fd < 0) return 0;
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return 0; }
+    void* map = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) return 0;
+    uintptr_t result = 0;
+    const uint8_t* base = (const uint8_t*)map;
+    const Elf64_Ehdr* eh = (const Elf64_Ehdr*)base;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) == 0 && eh->e_shoff && eh->e_shnum)
+    {
+        const Elf64_Shdr* sh = (const Elf64_Shdr*)(base + eh->e_shoff);
+        for (int i = 0; i < eh->e_shnum && !result; ++i)
+        {
+            if (sh[i].sh_type != SHT_DYNSYM && sh[i].sh_type != SHT_SYMTAB) continue;
+            const Elf64_Sym* syms = (const Elf64_Sym*)(base + sh[i].sh_offset);
+            const char* strs = (const char*)(base + sh[sh[i].sh_link].sh_offset);
+            size_t n = sh[i].sh_size / sizeof(Elf64_Sym);
+            for (size_t k = 0; k < n; ++k)
+                if (syms[k].st_value && strcmp(strs + syms[k].st_name, name) == 0)
+                { result = ctx.bias + syms[k].st_value; break; }
+        }
+    }
+    munmap(map, st.st_size);
+    return result;
+}
+
+template <class T> static bool Install(const char* sym, void* hook, T* orig)
+{
+    uintptr_t a = ResolveExact(sym);
+    if (!a) { LOGE("symbol not found: %s", sym); return false; }
+    aml->Hook((void*)a, hook, (void**)orig);
+    LOGI("hooked %s at %p", sym, (void*)a);
+    return true;
+}
+
+// ---------------------------------------------------------------- OpenAL (the copy inside libGTASA)
+typedef unsigned int ALuint;
+typedef int ALint;
+typedef int ALenum;
+typedef int ALsizei;
+typedef float ALfloat;
+#define AL_PITCH 0x1003
+#define AL_POSITION 0x1004
+#define AL_GAIN 0x100A
+#define AL_BUFFER 0x1009
+#define AL_SOURCE_RELATIVE 0x202
+#define AL_SOURCE_STATE 0x1010
+#define AL_STOPPED 0x1014
+#define AL_INITIAL 0x1011
+#define AL_REFERENCE_DISTANCE 0x1020
+#define AL_ROLLOFF_FACTOR 0x1021
+#define AL_MAX_DISTANCE 0x1023
+#define AL_FORMAT_MONO16 0x1101
+#define AL_FORMAT_STEREO16 0x1103
+
+static void (*alGenBuffers_)(ALsizei, ALuint*);
+static void (*alBufferData_)(ALuint, ALenum, const void*, ALsizei, ALsizei);
+static void (*alGenSources_)(ALsizei, ALuint*);
+static void (*alSourcei_)(ALuint, ALenum, ALint);
+static void (*alSourcef_)(ALuint, ALenum, ALfloat);
+static void (*alSource3f_)(ALuint, ALenum, ALfloat, ALfloat, ALfloat);
+static void (*alSourcePlay_)(ALuint);
+static void (*alSourceStop_)(ALuint);
+static void (*alGetSourcei_)(ALuint, ALenum, ALint*);
+static void (*alGetListener3f_)(ALenum, ALfloat*, ALfloat*, ALfloat*);
+static int (*alGetError_)();
+
+// ---------------------------------------------------------------- wav loading
+struct Snd { ALuint buf = 0; bool ok = false; bool mono = true; };
+
+static bool LoadWav(const std::string& path, Snd& out)
+{
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (sz < 44 || sz > 32 * 1024 * 1024) { fclose(f); return false; }
+    std::vector<uint8_t> d(sz);
+    if (fread(d.data(), 1, sz, f) != (size_t)sz) { fclose(f); return false; }
+    fclose(f);
+    if (memcmp(d.data(), "RIFF", 4) || memcmp(d.data() + 8, "WAVE", 4)) return false;
+    int ch = 0, bits = 0, rate = 0, fmt = 0;
+    const uint8_t* pcm = nullptr; uint32_t pcmLen = 0;
+    size_t p = 12;
+    while (p + 8 <= (size_t)sz)
+    {
+        uint32_t len; memcpy(&len, &d[p + 4], 4);
+        if (!memcmp(&d[p], "fmt ", 4) && p + 8 + 16 <= (size_t)sz)
+        {
+            uint16_t a, c, b; uint32_t r;
+            memcpy(&a, &d[p + 8], 2); memcpy(&c, &d[p + 10], 2); memcpy(&r, &d[p + 12], 4); memcpy(&b, &d[p + 22], 2);
+            fmt = a; ch = c; rate = r; bits = b;
+        }
+        else if (!memcmp(&d[p], "data", 4))
+        {
+            pcm = &d[p + 8];
+            pcmLen = len;
+            if (p + 8 + pcmLen > (size_t)sz) pcmLen = sz - p - 8;
+            break;
+        }
+        p += 8 + len + (len & 1);
+    }
+    if (!pcm || fmt != 1 || bits != 16 || (ch != 1 && ch != 2)) { LOGE("unsupported wav %s (fmt=%d ch=%d bits=%d)", path.c_str(), fmt, ch, bits); return false; }
+    if (pcmLen < 256) { LOGE("empty wav skipped: %s", path.c_str()); return false; }
+    alGenBuffers_(1, &out.buf);
+    alBufferData_(out.buf, ch == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16, pcm, pcmLen & ~3u, rate);
+    out.mono = (ch == 1);
+    out.ok = (alGetError_() == 0);
+    return out.ok;
+}
+
+// ---------------------------------------------------------------- settings (BulletTime.ini)
+static float g_Duration = 14.f;        // seconds a full bar lasts
+static float g_WorldSpeed = 0.35f;     // game speed in bullet time
+static float g_CJSpeed = 0.55f;        // how fast CJ moves (relative to normal)
+static float g_BlendIn = 1.0f, g_BlendOut = 1.0f;   // per 30 fps frame, 1 = instant
+static float g_StartMeter = 1.0f;
+static float g_ActMin = 0.01f;
+static float g_Refill = 0.02f;         // temporary: bar refill per real second while bullet time is off (kills will fill it later)
+static int   g_DoubleTapMs = 350;
+static float g_Zone[4] = { 0.38f, 0.0f, 0.62f, 0.14f };   // double tap area (fractions of the screen: x0,y0,x1,y1)
+static float g_Volume = 0.5f, g_IntroVol = 0.55f, g_OutroVol = 0.55f, g_BedVol = 0.7f, g_HeartVol = 0.5f, g_RunOutVol = 0.3f, g_RejectVol = 0.5f;
+static float g_BedFadeIn = 0.6f, g_BedFadeOut = 0.5f;
+static float g_HeartDelay = 0.9f, g_HeartInterval = 1.1f, g_HeartIntervalLow = 0.85f, g_HeartPitchLow = 1.1f;
+static float g_RunOutLead = 1.3f;
+static int   g_Enabled = 1, g_Audio = 1, g_LogTouch = 1;
+
+static void LoadConfig()
+{
+    std::string path = g_Dir + "BulletTime.ini";
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f)
+    {
+        f = fopen(path.c_str(), "w");
+        if (f)
+        {
+            fputs("[Settings]\nEnabled=1\n; seconds a full adrenaline bar lasts\nDuration=14\nWorldSpeed=0.35\nCJSpeed=0.55\nBlendIn=1\nBlendOut=1\nStartMeter=1\nRefillPerSecond=0.02\n"
+                  "; double tap this screen area to start / stop bullet time: x0,y0,x1,y1 as fractions of the screen\nZone=0.38,0.0,0.62,0.14\nDoubleTapMs=350\n"
+                  "Audio=1\nVolume=0.5\nIntroVolume=0.55\nOutroVolume=0.55\nBedVolume=0.7\nHeartbeatVolume=0.5\nRunningOutVolume=0.3\nRejectVolume=0.5\nLogTouch=1\n", f);
+            fclose(f);
+        }
+        return;
+    }
+    char line[256];
+    while (fgets(line, sizeof(line), f))
+    {
+        char* eq = strchr(line, '=');
+        if (!eq || line[0] == '[' || line[0] == ';' || line[0] == '#') continue;
+        *eq = 0; const char* k = line; const char* v = eq + 1;
+        if (!strcasecmp(k, "Enabled")) g_Enabled = atoi(v);
+        else if (!strcasecmp(k, "Duration")) g_Duration = fmaxf(1.f, (float)atof(v));
+        else if (!strcasecmp(k, "WorldSpeed")) g_WorldSpeed = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
+        else if (!strcasecmp(k, "CJSpeed")) g_CJSpeed = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
+        else if (!strcasecmp(k, "BlendIn")) g_BlendIn = fminf(1.f, fmaxf(0.01f, (float)atof(v)));
+        else if (!strcasecmp(k, "BlendOut")) g_BlendOut = fminf(1.f, fmaxf(0.01f, (float)atof(v)));
+        else if (!strcasecmp(k, "StartMeter")) g_StartMeter = fminf(1.f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "RefillPerSecond")) g_Refill = (float)atof(v);
+        else if (!strcasecmp(k, "DoubleTapMs")) g_DoubleTapMs = atoi(v);
+        else if (!strcasecmp(k, "Zone")) sscanf(v, "%f,%f,%f,%f", &g_Zone[0], &g_Zone[1], &g_Zone[2], &g_Zone[3]);
+        else if (!strcasecmp(k, "Audio")) g_Audio = atoi(v);
+        else if (!strcasecmp(k, "Volume")) g_Volume = (float)atof(v);
+        else if (!strcasecmp(k, "IntroVolume")) g_IntroVol = (float)atof(v);
+        else if (!strcasecmp(k, "OutroVolume")) g_OutroVol = (float)atof(v);
+        else if (!strcasecmp(k, "BedVolume")) g_BedVol = (float)atof(v);
+        else if (!strcasecmp(k, "HeartbeatVolume")) g_HeartVol = (float)atof(v);
+        else if (!strcasecmp(k, "RunningOutVolume")) g_RunOutVol = (float)atof(v);
+        else if (!strcasecmp(k, "RejectVolume")) g_RejectVol = (float)atof(v);
+        else if (!strcasecmp(k, "LogTouch")) g_LogTouch = atoi(v);
+    }
+    fclose(f);
+}
+
+// ---------------------------------------------------------------- sounds
+struct Voice { std::vector<Snd> v; };
+static Voice g_Intro, g_Bed, g_Outro, g_RunOut, g_Heart, g_Reject;
+static bool g_SoundsLoaded = false;
+static ALuint g_Chan[4];            // 0 fx (intro/outro/reject/running out), 1 bed (loop), 2 heartbeat, 3 spare
+static bool g_ChanInit = false;
+
+static void LoadVoice(const char* base, Voice& out)
+{
+    char n[96];
+    for (int i = 1; i <= 6; ++i)
+    {
+        Snd s; snprintf(n, sizeof(n), "%ssounds/%s_%d.wav", g_Dir.c_str(), base, i);
+        if (LoadWav(n, s)) out.v.push_back(s);
+    }
+}
+static void LoadSounds()
+{
+    if (g_SoundsLoaded) return;
+    g_SoundsLoaded = true;
+    LoadVoice("intro", g_Intro); LoadVoice("bed", g_Bed); LoadVoice("outro", g_Outro);
+    LoadVoice("running_out", g_RunOut); LoadVoice("heartbeat", g_Heart); LoadVoice("reject", g_Reject);
+    alGenSources_(4, g_Chan); g_ChanInit = true;
+    for (int i = 0; i < 4; ++i) { alSourcei_(g_Chan[i], AL_SOURCE_RELATIVE, 1); alSource3f_(g_Chan[i], AL_POSITION, 0, 0, 0); alSourcef_(g_Chan[i], AL_ROLLOFF_FACTOR, 0.f); }
+    LOGI("sounds: intro=%d bed=%d outro=%d running_out=%d heartbeat=%d reject=%d", (int)g_Intro.v.size(), (int)g_Bed.v.size(), (int)g_Outro.v.size(), (int)g_RunOut.v.size(), (int)g_Heart.v.size(), (int)g_Reject.v.size());
+}
+static void PlayOn(int ch, Voice& v, float gain, float pitch = 1.f, bool loop = false)
+{
+    if (!g_Audio || !g_ChanInit || v.v.empty()) return;
+    const Snd& s = v.v[rand() % v.v.size()];
+    alSourceStop_(g_Chan[ch]);
+    alSourcei_(g_Chan[ch], AL_BUFFER, s.buf);
+    alSourcei_(g_Chan[ch], 0x1007 /*AL_LOOPING*/, loop ? 1 : 0);
+    alSourcef_(g_Chan[ch], AL_GAIN, gain * g_Volume);
+    alSourcef_(g_Chan[ch], AL_PITCH, pitch);
+    alSourcePlay_(g_Chan[ch]);
+}
+
+// ---------------------------------------------------------------- game side
+typedef void* (*FindPlayerPed_t)(int);
+static FindPlayerPed_t g_FindPlayerPed = nullptr;
+static void* (*RpFirstAssoc)(void*) = nullptr;
+static void* (*RpNextAssoc)(void*) = nullptr;
+static float* g_TimeScale = nullptr;
+static int (*OS_W)() = nullptr;
+static int (*OS_H)() = nullptr;
+static void (*TimerUpdate_orig)() = nullptr;
+static void (*TouchEvent_orig)(int, int, int, int) = nullptr;
+
+static long long NowMs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+
+static bool  g_Active = false;
+static float g_Meter = 1.f;
+static float g_Scale = 1.f;            // time scale we are applying
+static float g_LastWritten = 1.f;
+static long long g_LastMs = 0, g_ActStart = 0, g_NextBeat = 0;
+static bool  g_RunOutPlayed = false;
+static long long g_BedFadeStart = 0; static int g_BedFadeDir = 0;   // 1 in, -1 out
+static float g_BedGain = 0.f;
+static std::atomic<int> g_Toggle{0};                                 // set by the touch thread: 1 = toggle requested
+
+// CJ keeps moving faster than the slowed world: scale the speed of his animations by (CJSpeed / WorldSpeed)
+struct Tracked { void* a; float base; float written; };
+static std::vector<Tracked> g_Tr;
+static void* g_TrPed = nullptr;
+
+static void ApplyCJSpeed(void* ped, float k)
+{
+    void* clump = *(void**)((uint8_t*)ped + 0x20);
+    if (!clump || !RpFirstAssoc || !RpNextAssoc) return;
+    std::vector<Tracked> now;
+    int guard = 0;
+    for (void* a = RpFirstAssoc(clump); a && guard < 64; a = RpNextAssoc(a), ++guard)
+    {
+        float* sp = (float*)((uint8_t*)a + 0x3C);
+        float cur = *sp;
+        if (!(cur > 0.02f && cur < 6.f)) continue;
+        Tracked t{ a, cur, cur };
+        for (auto& o : g_Tr)
+            if (o.a == a) { if (fabsf(cur - o.written) < 1e-4f) t.base = o.base; else t.base = cur; break; }   // unchanged since we wrote it: keep our base
+        t.written = t.base * k;
+        *sp = t.written;
+        now.push_back(t);
+    }
+    // associations that vanished from the list are gone; those still present and untouched are restored when bullet time ends
+    g_Tr.swap(now);
+}
+static void RestoreCJSpeed(void* ped)
+{
+    void* clump = ped ? *(void**)((uint8_t*)ped + 0x20) : nullptr;
+    if (clump && RpFirstAssoc && RpNextAssoc)
+    {
+        int guard = 0;
+        for (void* a = RpFirstAssoc(clump); a && guard < 64; a = RpNextAssoc(a), ++guard)
+            for (auto& o : g_Tr)
+                if (o.a == a) { float* sp = (float*)((uint8_t*)a + 0x3C); if (fabsf(*sp - o.written) < 1e-4f) *sp = o.base; break; }
+    }
+    g_Tr.clear();
+}
+
+static void StartBT()
+{
+    if (g_Meter < g_ActMin) { PlayOn(0, g_Reject, g_RejectVol); LOGI("bullet time: bar empty (%.2f)", g_Meter); return; }
+    g_Active = true; g_ActStart = NowMs(); g_RunOutPlayed = false; g_NextBeat = g_ActStart + (long long)(g_HeartDelay * 1000);
+    PlayOn(0, g_Intro, g_IntroVol);
+    PlayOn(1, g_Bed, 0.f, 1.f, true); g_BedGain = 0.f; g_BedFadeDir = 1; g_BedFadeStart = NowMs();
+    LOGI("bullet time ON (bar %.2f)", g_Meter);
+}
+static void StopBT(const char* why)
+{
+    g_Active = false;
+    PlayOn(0, g_Outro, g_OutroVol);
+    g_BedFadeDir = -1; g_BedFadeStart = NowMs();
+    LOGI("bullet time OFF (%s, bar %.2f)", why, g_Meter);
+}
+
+static void Tick()
+{
+    if (!g_SoundsLoaded) { if (g_FindPlayerPed && g_FindPlayerPed(0)) { LoadSounds(); g_Meter = g_StartMeter; } else return; }
+    long long now = NowMs();
+    float dt = g_LastMs ? (now - g_LastMs) / 1000.f : 0.016f;
+    g_LastMs = now;
+    if (dt > 0.25f) dt = 0.25f;
+
+    if (g_Toggle.exchange(0)) { if (g_Active) StopBT("tap"); else StartBT(); }
+
+    void* ped = g_FindPlayerPed ? g_FindPlayerPed(0) : nullptr;
+    if (g_Active)
+    {
+        g_Meter -= dt / g_Duration;
+        if (g_Meter <= 0.f) { g_Meter = 0.f; StopBT("bar empty"); }
+        else if (!g_RunOutPlayed && g_Meter * g_Duration <= g_RunOutLead) { g_RunOutPlayed = true; PlayOn(3, g_RunOut, g_RunOutVol); }
+        if (g_Active && now >= g_NextBeat)
+        {
+            bool low = g_Meter < 0.4f;
+            PlayOn(2, g_Heart, g_HeartVol, low ? g_HeartPitchLow : 1.f);
+            g_NextBeat = now + (long long)((low ? g_HeartIntervalLow : g_HeartInterval) * 1000);
+        }
+    }
+    else if (g_Refill > 0.f && g_Meter < 1.f) g_Meter = fminf(1.f, g_Meter + g_Refill * dt);
+
+    // world speed
+    float target = g_Active ? g_WorldSpeed : 1.f;
+    float blend = g_Active ? g_BlendIn : g_BlendOut;
+    float f = 1.f - powf(1.f - blend, dt * 30.f);
+    g_Scale += (target - g_Scale) * f;
+    if (fabsf(g_Scale - target) < 0.003f) g_Scale = target;
+    if (g_TimeScale && (g_Active || g_Scale != 1.f || g_LastWritten != 1.f)) { *g_TimeScale = g_Scale; g_LastWritten = g_Scale; }
+
+    // CJ
+    if (ped)
+    {
+        if (g_Active && g_Scale < 0.999f) { if (g_TrPed != ped) { g_Tr.clear(); g_TrPed = ped; } ApplyCJSpeed(ped, fminf(g_CJSpeed / g_Scale, 6.f)); }
+        else if (!g_Tr.empty()) RestoreCJSpeed(ped);
+    }
+
+    // bed fade
+    if (g_BedFadeDir != 0 && g_ChanInit)
+    {
+        float t = (now - g_BedFadeStart) / 1000.f;
+        float len = g_BedFadeDir > 0 ? g_BedFadeIn : g_BedFadeOut;
+        float p = len > 0 ? fminf(1.f, t / len) : 1.f;
+        g_BedGain = g_BedFadeDir > 0 ? p : (1.f - p);
+        alSourcef_(g_Chan[1], AL_GAIN, g_BedGain * g_BedVol * g_Volume);
+        if (p >= 1.f) { if (g_BedFadeDir < 0) alSourceStop_(g_Chan[1]); g_BedFadeDir = 0; }
+    }
+}
+static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Enabled) Tick(); }
+
+// double tap in the zone starts / stops bullet time
+static long long g_LastTap = 0;
+static void TouchEvent_hook(int action, int id, int x, int y)
+{
+    TouchEvent_orig(action, id, x, y);
+    if (!g_Enabled) return;
+    static int logged = 0;
+    if (g_LogTouch && logged < 30) { ++logged; LOGI("touch action=%d id=%d x=%d y=%d (screen %dx%d)", action, id, x, y, OS_W ? OS_W() : 0, OS_H ? OS_H() : 0); }
+    if (action != 1) return;                                   // finger down
+    int W = OS_W ? OS_W() : 0, H = OS_H ? OS_H() : 0;
+    if (W <= 0 || H <= 0) return;
+    float fx = (float)x / W, fy = (float)y / H;
+    if (fx < g_Zone[0] || fx > g_Zone[2] || fy < g_Zone[1] || fy > g_Zone[3]) { g_LastTap = 0; return; }
+    long long now = NowMs();
+    if (g_LastTap && now - g_LastTap <= g_DoubleTapMs) { g_Toggle = 1; g_LastTap = 0; }
+    else g_LastTap = now;
+}
+
+extern "C" __attribute__((visibility("default"))) void OnModLoad()
+{
+    g_Dir = DetectDir();
+    mkdir(g_Dir.c_str(), 0777);
+    mkdir((g_Dir + "sounds").c_str(), 0777);
+    g_Log = fopen((g_Dir + "log.txt").c_str(), "w");
+    LOGI("BulletTime OnModLoad, dir=%s", g_Dir.c_str());
+    LoadConfig();
+    srand((unsigned)time(nullptr));
+
+    *(void**)&alGenBuffers_ = (void*)ResolveExact("alGenBuffers");
+    *(void**)&alBufferData_ = (void*)ResolveExact("alBufferData");
+    *(void**)&alGenSources_ = (void*)ResolveExact("alGenSources");
+    *(void**)&alSourcei_    = (void*)ResolveExact("alSourcei");
+    *(void**)&alSourcef_    = (void*)ResolveExact("alSourcef");
+    *(void**)&alSource3f_   = (void*)ResolveExact("alSource3f");
+    *(void**)&alSourcePlay_ = (void*)ResolveExact("alSourcePlay");
+    *(void**)&alSourceStop_ = (void*)ResolveExact("alSourceStop");
+    *(void**)&alGetError_   = (void*)ResolveExact("alGetError");
+    g_FindPlayerPed = (FindPlayerPed_t)ResolveExact("_Z13FindPlayerPedi");
+    *(void**)&RpFirstAssoc  = (void*)ResolveExact("_Z35RpAnimBlendClumpGetFirstAssociationP7RpClump");
+    *(void**)&RpNextAssoc   = (void*)ResolveExact("_Z29RpAnimBlendGetNextAssociationP21CAnimBlendAssociation");
+    g_TimeScale = (float*)ResolveExact("_ZN6CTimer13ms_fTimeScaleE");
+    *(void**)&OS_W = (void*)ResolveExact("_Z17OS_ScreenGetWidthv");
+    *(void**)&OS_H = (void*)ResolveExact("_Z18OS_ScreenGetHeightv");
+    LOGI("symbols: timescale=%p findplayer=%p assoc=%p/%p screen=%p/%p", (void*)g_TimeScale, (void*)g_FindPlayerPed, (void*)RpFirstAssoc, (void*)RpNextAssoc, (void*)OS_W, (void*)OS_H);
+    if (!alGenBuffers_ || !alBufferData_ || !alGenSources_ || !alSourcei_ || !alSourcef_ || !alSource3f_ || !alSourcePlay_ || !alSourceStop_ || !alGetError_ || !g_TimeScale || !g_FindPlayerPed)
+    { LOGE("required symbols missing - mod disabled"); return; }
+
+    Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
+    Install("_Z14AND_TouchEventiiii", (void*)TouchEvent_hook, &TouchEvent_orig);
+}
