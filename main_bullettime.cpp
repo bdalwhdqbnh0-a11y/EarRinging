@@ -513,7 +513,7 @@ static void* FindAssocByHier(void* ped, void* hier)
 typedef void (*TakeNoEnt_t)(void*, const float*, short, int);
 typedef void (*CamFixed_t)(void*, const float*, const float*);
 typedef void (*CamRestore_t)(void*);
-static uint8_t* g_TheCam = nullptr; static TakeNoEnt_t g_CamTake = nullptr; static CamFixed_t g_CamFixed = nullptr; static CamRestore_t g_CamRestore = nullptr;
+static uint8_t* g_TheCam = nullptr; static TakeNoEnt_t g_CamTake = nullptr; static CamFixed_t g_CamFixed = nullptr; static CamRestore_t g_CamRestore = nullptr, g_CamRestoreCut = nullptr;
 static bool g_CamOn = false; static float g_CamP[3] = {0,0,0}; static long long g_CamLast = 0;
 static void CamWanted(void* ped, float* pos, float* look)
 {
@@ -549,6 +549,7 @@ static void CamStop()
     if (!g_CamOn) return;
     g_CamOn = false;
     if (g_CamRestore) g_CamRestore(g_TheCam);
+    if (g_CamRestoreCut) g_CamRestoreCut(g_TheCam);               // jump-cut back to the normal camera so it can never stay stuck
     LOGI("camera: restored");
 }
 
@@ -677,6 +678,7 @@ static void AirShoot(void* ped, long long nowReal)
 
 static void DiveTick(void* ped, long long now)
 {
+    if (g_CamOn && g_DS == DS_NONE) CamStop();                  // safety: never leave the camera taken
     if (!g_Dive || !ped) return;
     if (!g_DiveLoaded) LoadDiveAnims();
     if (!g_DiveBlock) return;
@@ -857,6 +859,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     *(void**)&g_CamTake = (void*)ResolveExact("_ZN7CCamera19TakeControlNoEntityERK7CVectorsi");
     *(void**)&g_CamFixed = (void*)ResolveExact("_ZN7CCamera26SetCamPositionForFixedModeERK7CVectorS2_");
     *(void**)&g_CamRestore = (void*)ResolveExact("_ZN7CCamera7RestoreEv");
+    *(void**)&g_CamRestoreCut = (void*)ResolveExact("_ZN7CCamera18RestoreWithJumpCutEv");
     LOGI("camera symbols: cam=%p take=%p fixed=%p restore=%p", (void*)g_TheCam, (void*)g_CamTake, (void*)g_CamFixed, (void*)g_CamRestore);
     g_GameMs = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
     LOGI("dive symbols: reg=%p load=%p open=%p blend=%p getpad=%p jump=%p lr=%p ud=%p padweapon=%p pointgun=%p fire=%p bone=%p ground=%p ms=%p", (void*)g_RegBlock, (void*)g_LoadAnim, (void*)g_StreamOpen, (void*)g_Blend, (void*)g_GetPad, (void*)g_JumpDown, (void*)g_WalkLR, (void*)g_WalkUD, (void*)g_PadWeapon, (void*)g_PointGun, (void*)g_WFire, (void*)g_GetBone, (void*)g_GroundZ, (void*)g_GameMs);
