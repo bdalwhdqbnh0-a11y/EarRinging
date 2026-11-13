@@ -41,3 +41,10 @@ target_include_directories(EarShot PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(EarShot PRIVATE -O2 -Wno-unused-function)
 target_link_libraries(EarShot log dl m)
+
+# --- BulletTime (slow motion + adrenaline bar, phase 1) ---
+add_library(BulletTime SHARED main_bullettime.cpp ${AML_SOURCES})
+target_include_directories(BulletTime PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(BulletTime PRIVATE -O2 -Wno-unused-function)
+target_link_libraries(BulletTime log dl m)
