@@ -543,6 +543,17 @@ static void CamTick(void* ped, long long now)
     float up[3] = {0,0,0};
     g_CamFixed(g_TheCam, g_CamP, up);
     float* lv = (float*)(g_TheCam + 0x83c); lv[0] = look[0]; lv[1] = look[1]; lv[2] = look[2];
+    // CCamera::CamControl copies the fixed-mode vectors into the active CCam only once; write them there every frame
+    uint8_t idx = g_TheCam[0x5f];
+    if (idx < 3)
+    {
+        uint8_t* c = g_TheCam + 0x178 + (size_t)idx * 0x228;
+        static int diag = 0;
+        if (g_DiveLog && diag < 6) { ++diag; float* os = (float*)(c + 0x138); LOGI("camera diag: cam#%u flag2=%u mode=%u oldsrc=(%.1f,%.1f,%.1f) want=(%.1f,%.1f,%.1f)", idx, c[2], *(uint16_t*)(g_TheCam + 0x186 + (size_t)idx * 0x228), os[0], os[1], os[2], g_CamP[0], g_CamP[1], g_CamP[2]); }
+        float* src = (float*)(c + 0x138); src[0] = g_CamP[0]; src[1] = g_CamP[1]; src[2] = g_CamP[2];
+        float* tv = (float*)(c + 0x12c); tv[0] = look[0]; tv[1] = look[1]; tv[2] = look[2];
+        c[2] = 1;
+    }
 }
 static void CamStop()
 {
@@ -663,7 +674,8 @@ static void AirShoot(void* ped, long long nowReal)
     if (g_NextFire && gnow < (uint32_t)g_NextFire) return;
     void* pad = g_GetPad(0);
     int fire = pad ? g_PadWeapon(pad, ped, false) : 0;
-    static int dbg = 0;
+    static int dbg = 0, samp = 0;
+    if (g_DiveLog && (samp++ % 20) == 0 && samp < 600) LOGI("dive: fire-button sample=%d target=%p", fire, g_Tgt);
     if (g_DiveLog && dbg < 40 && fire) { ++dbg; LOGI("dive: fire button=%d", fire); }
     if (!fire) return;
     unsigned slot = pb[0x8dc];
@@ -733,7 +745,9 @@ static void DiveTick(void* ped, long long now)
         float gz2 = g_GroundZ ? g_GroundZ(g_DPos[0], g_DPos[1]) : g_DPos[2] - g_DOff; g_DPos[2] = gz2 + g_DOff;
         pos[0] = g_DPos[0]; pos[1] = g_DPos[1]; pos[2] = g_DPos[2]; mv[0] = mv[1] = mv[2] = 0.f;
         if (el < g_DiveMaxMs && g_AirFire && el - (g_DLand - g_DStart) < 700) AirShoot(ped, now);   // still shooting right after landing
-        if (!mine || el > g_DiveMaxMs) { EndDive(ped, mine ? "max time" : "animation finished"); return; }
+        bool done = !mine;
+        if (mine) { void* hh = *(void**)((uint8_t*)mine + 0x28); float ct = *(float*)((uint8_t*)mine + 0x38), tot = hh ? *(float*)((uint8_t*)hh + 0x18) : 0.f; if (tot > 0.2f && ct >= tot - 0.04f) done = true; }
+        if (done || el > g_DiveMaxMs) { EndDive(ped, done ? "animation finished" : "max time"); return; }
     }
 }
 
