@@ -210,6 +210,8 @@ static int   g_DiveFlags = 0, g_FireGapMs = 140;
 static float g_DiveAnimBlend = 8.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 4500;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.35f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
+static float g_FireZone[4] = { 0.72f, 0.45f, 0.86f, 0.72f };   // touch area of the on-screen fire button (fractions of the screen)
+static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 1;
@@ -275,6 +277,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveMaxDist")) g_DiveMaxDist = (float)atof(v);
+        else if (!strcasecmp(k, "FireZone")) sscanf(v, "%f,%f,%f,%f", &g_FireZone[0], &g_FireZone[1], &g_FireZone[2], &g_FireZone[3]);
         else if (!strcasecmp(k, "AutoAim")) g_AutoAim = atoi(v);
         else if (!strcasecmp(k, "TurnToTarget")) g_TurnToTarget = atoi(v);
         else if (!strcasecmp(k, "AimRange")) g_AimRange = (float)atof(v);
@@ -674,6 +677,8 @@ static void AirShoot(void* ped, long long nowReal)
     if (g_NextFire && gnow < (uint32_t)g_NextFire) return;
     void* pad = g_GetPad(0);
     int fire = pad ? g_PadWeapon(pad, ped, false) : 0;
+    for (int i = 0; i < 8 && !fire; ++i)                          // fallback: a finger on the fire button area counts as fire
+        if (g_TouchDown[i] && g_TouchX[i] >= g_FireZone[0] && g_TouchX[i] <= g_FireZone[2] && g_TouchY[i] >= g_FireZone[1] && g_TouchY[i] <= g_FireZone[3]) fire = 1000;
     static int dbg = 0, samp = 0;
     if (g_DiveLog && (samp++ % 20) == 0 && samp < 600) LOGI("dive: fire-button sample=%d target=%p", fire, g_Tgt);
     if (g_DiveLog && dbg < 40 && fire) { ++dbg; LOGI("dive: fire button=%d", fire); }
@@ -812,6 +817,12 @@ static void TouchEvent_hook(int action, int id, int x, int y)
 {
     TouchEvent_orig(action, id, x, y);
     if (!g_Enabled) return;
+    {
+        int W0 = OS_W ? OS_W() : 0, H0 = OS_H ? OS_H() : 0;
+        if (id >= 0 && id < 8 && W0 > 0 && H0 > 0) { g_TouchDown[id] = (action == 2 || action == 3); g_TouchX[id] = (float)x / W0; g_TouchY[id] = (float)y / H0; }
+        static int dl = 0;
+        if (g_DS != 0 && action != 3 && dl < 120) { ++dl; LOGI("dive touch action=%d id=%d at (%.2f,%.2f)", action, id, W0 > 0 ? (float)x / W0 : 0.f, H0 > 0 ? (float)y / H0 : 0.f); }
+    }
     static int logged = 0;
     if (g_LogTouch && logged < 30) { ++logged; LOGI("touch action=%d id=%d x=%d y=%d (screen %dx%d)", action, id, x, y, OS_W ? OS_W() : 0, OS_H ? OS_H() : 0); }
     if (action != 2) return;                                   // finger down (this game: 2 = down, 3 = move, 1 = up)
