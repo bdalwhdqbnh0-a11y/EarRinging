@@ -202,6 +202,13 @@ static float g_BedFadeIn = 0.6f, g_BedFadeOut = 0.5f;
 static float g_HeartDelay = 0.9f, g_HeartInterval = 1.1f, g_HeartIntervalLow = 0.85f, g_HeartPitchLow = 1.1f;
 static float g_RunOutLead = 1.3f;
 static int   g_Enabled = 1, g_Audio = 1, g_LogTouch = 1;
+// dive (phase 2)
+static int   g_Dive = 1, g_DiveNeedBT = 1, g_AirAim = 1, g_AirFire = 1, g_DiveLog = 1;
+static float g_DiveUp = 0.075f, g_DiveSpeed = 0.11f;      // game units per time step (1 step = 1/50 s): 3.75 and 5.5 m/s
+static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone that starts a dive (disabled when empty)
+static int   g_DiveFlags = 0, g_FireGapMs = 140;
+static float g_DiveAnimBlend = 8.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
+static int   g_DiveMaxMs = 4500;
 
 static void LoadConfig()
 {
@@ -214,6 +221,7 @@ static void LoadConfig()
         {
             fputs("[Settings]\nEnabled=1\n; seconds a full adrenaline bar lasts\nDuration=14\nWorldSpeed=0.35\nCJSpeed=0.55\nBlendIn=1\nBlendOut=1\nStartMeter=1\nRefillPerSecond=0.02\n"
                   "; double tap this screen area to start / stop bullet time: x0,y0,x1,y1 as fractions of the screen\nZone=0.38,0.0,0.62,0.14\nDoubleTapMs=350\n"
+                  "; --- dive (jump button while bullet time is on) ---\nDive=1\nDiveNeedsBulletTime=1\nAirAim=1\nAirFire=1\nDiveUp=0.075\nDiveSpeed=0.11\nDiveZone=0,0,0,0\nDiveLog=1\nDiveVolume=0.6\n"
                   "Audio=1\nVolume=0.5\nIntroVolume=0.55\nOutroVolume=0.55\nBedVolume=0.7\nHeartbeatVolume=0.5\nRunningOutVolume=0.3\nRejectVolume=0.5\nLogTouch=1\n", f);
             fclose(f);
         }
@@ -244,31 +252,63 @@ static void LoadConfig()
         else if (!strcasecmp(k, "RunningOutVolume")) g_RunOutVol = (float)atof(v);
         else if (!strcasecmp(k, "RejectVolume")) g_RejectVol = (float)atof(v);
         else if (!strcasecmp(k, "LogTouch")) g_LogTouch = atoi(v);
+        else if (!strcasecmp(k, "Dive")) g_Dive = atoi(v);
+        else if (!strcasecmp(k, "DiveNeedsBulletTime")) g_DiveNeedBT = atoi(v);
+        else if (!strcasecmp(k, "AirAim")) g_AirAim = atoi(v);
+        else if (!strcasecmp(k, "AirFire")) g_AirFire = atoi(v);
+        else if (!strcasecmp(k, "DiveLog")) g_DiveLog = atoi(v);
+        else if (!strcasecmp(k, "DiveUp")) g_DiveUp = (float)atof(v);
+        else if (!strcasecmp(k, "DiveSpeed")) g_DiveSpeed = (float)atof(v);
+        else if (!strcasecmp(k, "DiveZone")) sscanf(v, "%f,%f,%f,%f", &g_DiveZone[0], &g_DiveZone[1], &g_DiveZone[2], &g_DiveZone[3]);
+        else if (!strcasecmp(k, "DiveAnimFlags")) g_DiveFlags = (int)strtol(v, nullptr, 0);
+        else if (!strcasecmp(k, "DiveAnimBlend")) g_DiveAnimBlend = (float)atof(v);
+        else if (!strcasecmp(k, "LandSlide")) g_LandSlide = (float)atof(v);
+        else if (!strcasecmp(k, "DiveVolume")) g_DiveVol = (float)atof(v);
+        else if (!strcasecmp(k, "DiveMaxMs")) g_DiveMaxMs = atoi(v);
+        else if (!strcasecmp(k, "FireGapMs")) g_FireGapMs = atoi(v);
     }
     fclose(f);
 }
 
 // ---------------------------------------------------------------- sounds
 struct Voice { std::vector<Snd> v; };
-static Voice g_Intro, g_Bed, g_Outro, g_RunOut, g_Heart, g_Reject;
+static Voice g_Intro, g_Bed, g_Outro, g_RunOut, g_Heart, g_Reject, g_DiveS, g_DiveBt, g_LandS, g_LandBt;
 static bool g_SoundsLoaded = false;
 static ALuint g_Chan[4];            // 0 fx (intro/outro/reject/running out), 1 bed (loop), 2 heartbeat, 3 spare
 static bool g_ChanInit = false;
 
+static std::string g_SndDir;     // the folder the wavs were found in
+static bool FindSoundDir()
+{
+    const char* tries[] = { "sounds/", "BulletTime/sounds/", "../BulletTime/sounds/", "", "Sounds/" };
+    for (const char* t : tries)
+    {
+        std::string d = g_Dir + t;
+        if (access((d + "intro_1.wav").c_str(), R_OK) == 0 || access((d + "bed_1.wav").c_str(), R_OK) == 0) { g_SndDir = d; return true; }
+    }
+    return false;
+}
 static void LoadVoice(const char* base, Voice& out)
 {
     char n[96];
     for (int i = 1; i <= 6; ++i)
     {
-        Snd s; snprintf(n, sizeof(n), "%ssounds/%s_%d.wav", g_Dir.c_str(), base, i);
-        if (LoadWav(n, s)) out.v.push_back(s);
+        Snd s; snprintf(n, sizeof(n), "%s_%d.wav", base, i);
+        std::string path = g_SndDir + n;
+        if (access(path.c_str(), R_OK) != 0) continue;
+        alGetError_();                                   // clear
+        if (LoadWav(path, s)) out.v.push_back(s);
+        else LOGE("could not load %s (al error 0x%x)", path.c_str(), alGetError_());
     }
 }
 static void LoadSounds()
 {
     if (g_SoundsLoaded) return;
     g_SoundsLoaded = true;
+    if (!FindSoundDir()) LOGE("no sound files found: put them in %ssounds/ (intro_1.wav, bed_1.wav, ...)", g_Dir.c_str());
+    else LOGI("sounds folder: %s", g_SndDir.c_str());
     LoadVoice("intro", g_Intro); LoadVoice("bed", g_Bed); LoadVoice("outro", g_Outro);
+    LoadVoice("dive", g_DiveS); LoadVoice("dive_bt", g_DiveBt); LoadVoice("land", g_LandS); LoadVoice("land_bt", g_LandBt);
     LoadVoice("running_out", g_RunOut); LoadVoice("heartbeat", g_Heart); LoadVoice("reject", g_Reject);
     alGenSources_(4, g_Chan); g_ChanInit = true;
     for (int i = 0; i < 4; ++i) { alSourcei_(g_Chan[i], AL_SOURCE_RELATIVE, 1); alSource3f_(g_Chan[i], AL_POSITION, 0, 0, 0); alSourcef_(g_Chan[i], AL_ROLLOFF_FACTOR, 0.f); }
@@ -364,6 +404,199 @@ static void StopBT(const char* why)
     LOGI("bullet time OFF (%s, bar %.2f)", why, g_Meter);
 }
 
+
+// ---------------------------------------------------------------- dive (phase 2)
+typedef void* (*RegisterAnimBlock_t)(const char*);
+typedef void  (*LoadAnimFile_t)(void*, bool, const char (*)[32]);
+typedef void* (*RwStreamOpen_t)(int, int, const void*);
+typedef int   (*RwStreamClose_t)(void*, void*);
+typedef void* (*GetBlock_t)(const char*);
+typedef void* (*GetAnim_t)(const char*, const void*);
+typedef void* (*BlendAnim_t)(void*, void*, int, float);
+typedef void* (*GetPad_t)(int);
+typedef bool  (*PadBool_t)(void*);
+typedef int16_t (*PadAxis_t)(void*);
+typedef int   (*PadWeapon_t)(void*, void*, bool);
+typedef void  (*PointGun_t)(void*, const float*, float);
+typedef bool  (*WeaponFire_t)(void*, void*, float*, float*, void*, float*, float*);
+typedef void* (*GetBonePos_t)(void*, float*, unsigned, bool);
+typedef float (*FindGroundZ_t)(float, float);
+static RegisterAnimBlock_t g_RegBlock; static LoadAnimFile_t g_LoadAnim; static RwStreamOpen_t g_StreamOpen; static RwStreamClose_t g_StreamClose;
+static GetBlock_t g_GetBlock; static GetAnim_t g_GetAnim; static BlendAnim_t g_Blend; static GetPad_t g_GetPad;
+static PadBool_t g_JumpDown; static PadAxis_t g_WalkLR, g_WalkUD; static PadWeapon_t g_PadWeapon; static PointGun_t g_PointGun;
+static WeaponFire_t g_WFire; static GetBonePos_t g_GetBone; static FindGroundZ_t g_GroundZ; static uint32_t* g_GameMs;
+static void* g_DiveBlock = nullptr;
+static void* g_DiveHier[14];
+static bool  g_DiveLoaded = false;
+static const char* kDiveNames[14] = { "sd_dive_fwd","sd_dive_fwd_2h","sd_dive_fwd_dual","sd_dive_bkw","sd_dive_bkw_2h","sd_dive_bkw_dual",
+    "sd_dive_left","sd_dive_left_2h","sd_dive_left_dual","sd_dive_right","sd_dive_right_2h","sd_dive_right_dual","sd_reload","sd_reload_2h" };
+
+struct RwMemory { uint8_t* start; uint32_t length; };
+static void LoadDiveAnims()
+{
+    if (g_DiveLoaded) return;
+    g_DiveLoaded = true;
+    if (!g_RegBlock || !g_LoadAnim || !g_StreamOpen || !g_StreamClose || !g_GetBlock || !g_GetAnim) { LOGE("dive: anim symbols missing"); return; }
+    const char* tries[] = { "anims/MP3SD.ifp", "MP3SD.ifp", "sounds/MP3SD.ifp" };
+    std::vector<uint8_t> data;
+    for (auto t : tries)
+    {
+        FILE* f = fopen((g_Dir + t).c_str(), "rb"); if (!f) continue;
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        if (sz > 36 && sz < 16 * 1024 * 1024) { data.resize(sz); if (fread(data.data(), 1, sz, f) != (size_t)sz) data.clear(); }
+        fclose(f);
+        if (!data.empty()) { LOGI("dive: ifp %s%s (%zu bytes)", g_Dir.c_str(), t, data.size()); break; }
+    }
+    if (data.empty() || memcmp(data.data(), "ANP3", 4) != 0) { LOGE("dive: MP3SD.ifp missing or not ANP3 (put it in %sanims/)", g_Dir.c_str()); return; }
+    char block[25] = {0}; memcpy(block, data.data() + 8, 24);
+    void* b = g_RegBlock(block);
+    RwMemory mem = { data.data(), (uint32_t)data.size() };
+    void* st = g_StreamOpen(3, 1, &mem);
+    if (!st) { LOGE("dive: RwStreamOpen failed"); return; }
+    g_LoadAnim(st, false, nullptr);
+    g_StreamClose(st, nullptr);
+    g_DiveBlock = g_GetBlock(block);
+    int ok = 0;
+    for (int i = 0; i < 14; ++i) { g_DiveHier[i] = g_DiveBlock ? g_GetAnim(kDiveNames[i], g_DiveBlock) : nullptr; if (g_DiveHier[i]) ++ok; }
+    LOGI("dive: block '%s' registered=%p lookup=%p hierarchies found %d/14 (dive_fwd=%p)", block, b, g_DiveBlock, ok, g_DiveHier[0]);
+}
+
+enum { DS_NONE = 0, DS_FLY, DS_LAND };
+static int   g_DS = DS_NONE;
+static long long g_DStart = 0, g_DLand = 0, g_NextFire = 0;
+static float g_DHv[2] = {0, 0}, g_DAim[3] = {0, 1, 0};
+static int   g_DAnim = 0, g_DShots = 0, g_DBlendTried = 0;
+static void* g_DAssoc = nullptr;
+static std::atomic<int> g_DiveTouch{0};
+
+static float* PedMat(void* ped) { return *(float**)((uint8_t*)ped + 0x18); }
+static float* PedPos(void* ped) { float* m = PedMat(ped); return m ? m + 12 : (float*)((uint8_t*)ped + 8); }   // matrix +0x30
+static float* PedMove(void* ped) { return (float*)((uint8_t*)ped + 0x68); }
+
+static void* FindAssocByHier(void* ped, void* hier)
+{
+    void* clump = *(void**)((uint8_t*)ped + 0x20);
+    if (!clump || !hier || !RpFirstAssoc || !RpNextAssoc) return nullptr;
+    int guard = 0;
+    for (void* a = RpFirstAssoc(clump); a && guard < 64; a = RpNextAssoc(a), ++guard)
+        if (*(void**)((uint8_t*)a + 0x28) == hier) return a;
+    return nullptr;
+}
+
+static void StartDive(void* ped)
+{
+    if (!g_DiveBlock) { LOGE("dive: animations not loaded"); return; }
+    void* pad = g_GetPad ? g_GetPad(0) : nullptr;
+    int lr = (pad && g_WalkLR) ? g_WalkLR(pad) : 0, ud = (pad && g_WalkUD) ? g_WalkUD(pad) : 0;
+    float* m = PedMat(ped);
+    float fwd[2] = { 0, 1 }, rgt[2] = { 1, 0 };
+    if (m) { fwd[0] = m[4]; fwd[1] = m[5]; rgt[0] = m[0]; rgt[1] = m[1]; }   // matrix right = +0x00, forward = +0x10
+    float fl = sqrtf(fwd[0] * fwd[0] + fwd[1] * fwd[1]); if (fl > 1e-3f) { fwd[0] /= fl; fwd[1] /= fl; }
+    int dir = 0;                                        // 0 fwd, 1 bkw, 2 left, 3 right
+    if (abs(ud) >= abs(lr)) { if (ud > 30) dir = 1; else if (ud < -30) dir = 0; else dir = 0; }
+    else dir = lr > 30 ? 3 : 2;
+    float hv[2] = { fwd[0], fwd[1] };
+    if (dir == 1) { hv[0] = -fwd[0]; hv[1] = -fwd[1]; }
+    else if (dir == 2) { hv[0] = -rgt[0]; hv[1] = -rgt[1]; }
+    else if (dir == 3) { hv[0] = rgt[0]; hv[1] = rgt[1]; }
+    unsigned slot = *((uint8_t*)ped + 0x8dc);
+    int var = (slot == 3 || slot == 5 || slot == 6) ? 1 : 0;            // shotgun / assault / rifle slots: two-handed
+    g_DAnim = dir * 3 + var;
+    void* h = g_DiveHier[g_DAnim] ? g_DiveHier[g_DAnim] : g_DiveHier[dir * 3];
+    void* clump = *(void**)((uint8_t*)ped + 0x20);
+    if (!h || !clump || !g_Blend) { LOGE("dive: no hierarchy/clump/blend (h=%p clump=%p)", h, clump); return; }
+    g_DAssoc = g_Blend(clump, h, g_DiveFlags, g_DiveAnimBlend);
+    g_DHv[0] = hv[0] * g_DiveSpeed; g_DHv[1] = hv[1] * g_DiveSpeed;
+    g_DAim[0] = fwd[0]; g_DAim[1] = fwd[1]; g_DAim[2] = 0.f;
+    float* mv = PedMove(ped); mv[0] = g_DHv[0]; mv[1] = g_DHv[1]; mv[2] = g_DiveUp;
+    g_DS = DS_FLY; g_DStart = NowMs(); g_DLand = 0; g_NextFire = 0; g_DShots = 0;
+    PlayOn(3, g_Active ? g_DiveBt : g_DiveS, g_DiveVol);
+    LOGI("dive START dir=%d var=%d slot=%u stick=(%d,%d) anim=%s assoc=%p v=(%.3f,%.3f,%.3f) pos=(%.1f,%.1f,%.1f)", dir, var, slot, lr, ud, kDiveNames[g_DAnim], g_DAssoc,
+         mv[0], mv[1], mv[2], PedPos(ped)[0], PedPos(ped)[1], PedPos(ped)[2]);
+}
+
+static void EndDive(void* ped, const char* why)
+{
+    g_DS = DS_NONE;
+    LOGI("dive END (%s) after %lld ms, shots fired=%d", why, NowMs() - g_DStart, g_DShots);
+}
+
+static void AirShoot(void* ped, long long nowReal)
+{
+    // 1) point the arms (IK) at a target in front of CJ
+    uint8_t* pb = (uint8_t*)ped;
+    float org[3] = { 0, 0, 0 };
+    float* pos = PedPos(ped);
+    if (g_GetBone) g_GetBone(ped, org, 24, false); else { org[0] = pos[0]; org[1] = pos[1]; org[2] = pos[2]; }   // bone 24 = right hand
+    float tgt[3] = { org[0] + g_DAim[0] * 30.f, org[1] + g_DAim[1] * 30.f, org[2] + g_DAim[2] * 30.f };
+    if (g_AirAim && g_PointGun) g_PointGun(pb + 0x678, tgt, 1.0f);
+    // 2) fire while the fire button is held
+    if (!g_AirFire || !g_WFire || !g_PadWeapon || !g_GetPad) return;
+    uint32_t gnow = g_GameMs ? *g_GameMs : 0;
+    if (g_NextFire && gnow < (uint32_t)g_NextFire) return;
+    void* pad = g_GetPad(0);
+    int fire = pad ? g_PadWeapon(pad, ped, false) : 0;
+    static int dbg = 0;
+    if (g_DiveLog && dbg < 40 && fire) { ++dbg; LOGI("dive: fire button=%d", fire); }
+    if (!fire) return;
+    unsigned slot = pb[0x8dc];
+    uint8_t* w = pb + 0x730 + slot * 32;
+    int type = *(int*)w, state = *(int*)(w + 4), clip = *(int*)(w + 8);
+    if (type <= 0 || clip <= 0 || state != 0) { if (g_DiveLog && dbg < 40) { ++dbg; LOGI("dive: cannot fire type=%d state=%d clip=%d", type, state, clip); } return; }
+    float eff[3] = { org[0] + g_DAim[0] * 0.6f, org[1] + g_DAim[1] * 0.6f, org[2] + g_DAim[2] * 0.6f };
+    bool r = g_WFire(w, ped, org, eff, nullptr, tgt, nullptr);
+    ++g_DShots; g_NextFire = (long long)gnow + g_FireGapMs;
+    if (g_DiveLog && g_DShots <= 12) LOGI("dive: Fire() -> %d  clip %d -> %d state=%d", (int)r, clip, *(int*)(w + 8), *(int*)(w + 4));
+}
+
+static void DiveTick(void* ped, long long now)
+{
+    if (!g_Dive || !ped) return;
+    if (!g_DiveLoaded) LoadDiveAnims();
+    if (!g_DiveBlock) return;
+    if (g_DS == DS_NONE)
+    {
+        bool req = g_DiveTouch.exchange(0) != 0;
+        if (g_JumpDown && g_GetPad) { void* pad = g_GetPad(0); if (pad && g_JumpDown(pad)) req = true; }
+        if (req && (g_Active || !g_DiveNeedBT)) StartDive(ped);
+        return;
+    }
+    // keep the dive animation on top, silence the others
+    void* mine = FindAssocByHier(ped, g_DiveHier[g_DAnim] ? g_DiveHier[g_DAnim] : g_DiveHier[(g_DAnim / 3) * 3]);
+    float mw = 0.f;
+    if (mine) { mw = *(float*)((uint8_t*)mine + 0x30); g_DAssoc = mine; }
+    void* clump = *(void**)((uint8_t*)ped + 0x20);
+    if (clump && mine && RpFirstAssoc && RpNextAssoc)
+    {
+        int guard = 0;
+        for (void* a = RpFirstAssoc(clump); a && guard < 64; a = RpNextAssoc(a), ++guard)
+        {
+            if (a == mine) continue;
+            float* amt = (float*)((uint8_t*)a + 0x30);
+            float lim = fmaxf(0.f, 1.f - mw);
+            if (*amt > lim) *amt = lim;
+        }
+    }
+    float* pos = PedPos(ped); float* mv = PedMove(ped);
+    long long el = now - g_DStart;
+    if (g_DS == DS_FLY)
+    {
+        mv[0] = g_DHv[0]; mv[1] = g_DHv[1];                     // constant horizontal speed in the air
+        float gz = g_GroundZ ? g_GroundZ(pos[0], pos[1]) : pos[2] - 5.f;
+        static int dl = 0; if (g_DiveLog && dl < 60 && (el / 120) != (long long)dl) { dl = (int)(el / 120); }
+        if (el > 150 && mv[2] <= 0.f && pos[2] - gz < 1.25f) { g_DS = DS_LAND; g_DLand = now; PlayOn(3, g_Active ? g_LandBt : g_LandS, g_DiveVol); LOGI("dive LAND after %lld ms z=%.2f ground=%.2f", el, pos[2], gz); }
+        else if (el > 3500) { EndDive(ped, "flight timeout"); return; }
+        else if (g_AirAim || g_AirFire) AirShoot(ped, now);
+    }
+    else
+    {
+        float k = g_LandSlide;                                    // slide on the ground, fading out
+        mv[0] *= k > 0 ? 0.9f : 0.f; mv[1] *= k > 0 ? 0.9f : 0.f;
+        if (el < g_DiveMaxMs && g_AirFire && el - (g_DLand - g_DStart) < 700) AirShoot(ped, now);   // still shooting right after landing
+        if (!mine || el > g_DiveMaxMs) { EndDive(ped, mine ? "max time" : "animation finished"); return; }
+    }
+}
+
 static void Tick()
 {
     if (!g_SoundsLoaded) { if (g_FindPlayerPed && g_FindPlayerPed(0)) { LoadSounds(); g_Meter = g_StartMeter; } else return; }
@@ -397,6 +630,8 @@ static void Tick()
     if (fabsf(g_Scale - target) < 0.003f) g_Scale = target;
     if (g_TimeScale && (g_Active || g_Scale != 1.f || g_LastWritten != 1.f)) { *g_TimeScale = g_Scale; g_LastWritten = g_Scale; }
 
+    if (ped) DiveTick(ped, now);
+
     // CJ
     if (ped)
     {
@@ -425,10 +660,11 @@ static void TouchEvent_hook(int action, int id, int x, int y)
     if (!g_Enabled) return;
     static int logged = 0;
     if (g_LogTouch && logged < 30) { ++logged; LOGI("touch action=%d id=%d x=%d y=%d (screen %dx%d)", action, id, x, y, OS_W ? OS_W() : 0, OS_H ? OS_H() : 0); }
-    if (action != 1) return;                                   // finger down
+    if (action != 2) return;                                   // finger down (this game: 2 = down, 3 = move, 1 = up)
     int W = OS_W ? OS_W() : 0, H = OS_H ? OS_H() : 0;
     if (W <= 0 || H <= 0) return;
     float fx = (float)x / W, fy = (float)y / H;
+    if (g_DiveZone[2] > g_DiveZone[0] && fx >= g_DiveZone[0] && fx <= g_DiveZone[2] && fy >= g_DiveZone[1] && fy <= g_DiveZone[3]) { g_DiveTouch = 1; return; }
     if (fx < g_Zone[0] || fx > g_Zone[2] || fy < g_Zone[1] || fy > g_Zone[3]) { g_LastTap = 0; return; }
     long long now = NowMs();
     if (g_LastTap && now - g_LastTap <= g_DoubleTapMs) { g_Toggle = 1; g_LastTap = 0; }
@@ -460,6 +696,24 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_TimeScale = (float*)ResolveExact("_ZN6CTimer13ms_fTimeScaleE");
     *(void**)&OS_W = (void*)ResolveExact("_Z17OS_ScreenGetWidthv");
     *(void**)&OS_H = (void*)ResolveExact("_Z18OS_ScreenGetHeightv");
+    *(void**)&g_RegBlock = (void*)ResolveExact("_ZN12CAnimManager17RegisterAnimBlockEPKc");
+    *(void**)&g_LoadAnim = (void*)ResolveExact("_ZN12CAnimManager12LoadAnimFileEP8RwStreambPA32_Kc");
+    *(void**)&g_StreamOpen = (void*)ResolveExact("_Z12RwStreamOpen12RwStreamType18RwStreamAccessTypePKv");
+    *(void**)&g_StreamClose = (void*)ResolveExact("_Z13RwStreamCloseP8RwStreamPv");
+    *(void**)&g_GetBlock = (void*)ResolveExact("_ZN12CAnimManager17GetAnimationBlockEPKc");
+    *(void**)&g_GetAnim = (void*)ResolveExact("_ZN12CAnimManager12GetAnimationEPKcPK10CAnimBlock");
+    *(void**)&g_Blend = (void*)ResolveExact("_ZN12CAnimManager14BlendAnimationEP7RpClumpP19CAnimBlendHierarchyif");
+    *(void**)&g_GetPad = (void*)ResolveExact("_ZN4CPad6GetPadEi");
+    *(void**)&g_JumpDown = (void*)ResolveExact("_ZN4CPad12JumpJustDownEv");
+    *(void**)&g_WalkLR = (void*)ResolveExact("_ZN4CPad19GetPedWalkLeftRightEv");
+    *(void**)&g_WalkUD = (void*)ResolveExact("_ZN4CPad16GetPedWalkUpDownEv");
+    *(void**)&g_PadWeapon = (void*)ResolveExact("_ZN4CPad9GetWeaponEP4CPedb");
+    *(void**)&g_PointGun = (void*)ResolveExact("_ZN6CPedIK18PointGunAtPositionERK7CVectorf");
+    *(void**)&g_WFire = (void*)ResolveExact("_ZN7CWeapon4FireEP7CEntityP7CVectorS3_S1_S3_S3_");
+    *(void**)&g_GetBone = (void*)ResolveExact("_ZN4CPed15GetBonePositionER5RwV3djb");
+    *(void**)&g_GroundZ = (void*)ResolveExact("_ZN6CWorld19FindGroundZForCoordEff");
+    g_GameMs = (uint32_t*)ResolveExact("_ZN6CTimer22m_snTimeInMillisecondsE");
+    LOGI("dive symbols: reg=%p load=%p open=%p blend=%p getpad=%p jump=%p lr=%p ud=%p padweapon=%p pointgun=%p fire=%p bone=%p ground=%p ms=%p", (void*)g_RegBlock, (void*)g_LoadAnim, (void*)g_StreamOpen, (void*)g_Blend, (void*)g_GetPad, (void*)g_JumpDown, (void*)g_WalkLR, (void*)g_WalkUD, (void*)g_PadWeapon, (void*)g_PointGun, (void*)g_WFire, (void*)g_GetBone, (void*)g_GroundZ, (void*)g_GameMs);
     LOGI("symbols: timescale=%p findplayer=%p assoc=%p/%p screen=%p/%p", (void*)g_TimeScale, (void*)g_FindPlayerPed, (void*)RpFirstAssoc, (void*)RpNextAssoc, (void*)OS_W, (void*)OS_H);
     if (!alGenBuffers_ || !alBufferData_ || !alGenSources_ || !alSourcei_ || !alSourcef_ || !alSource3f_ || !alSourcePlay_ || !alSourceStop_ || !alGetError_ || !g_TimeScale || !g_FindPlayerPed)
     { LOGE("required symbols missing - mod disabled"); return; }
