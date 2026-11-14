@@ -215,7 +215,7 @@ static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire butto
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static int   g_StripRoot = 1;
-static int   g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
+static int   g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -287,6 +287,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "FireZone")) sscanf(v, "%f,%f,%f,%f", &g_FireZone[0], &g_FireZone[1], &g_FireZone[2], &g_FireZone[3]);
         else if (!strcasecmp(k, "CameraFollowBack")) g_CamBack = atoi(v);
         else if (!strcasecmp(k, "StickRelativeToCamera")) g_CamAxis = atoi(v);
+        else if (!strcasecmp(k, "InfiniteBar")) g_InfBar = atoi(v);
         else if (!strcasecmp(k, "HideHudInDive")) g_HideHud = atoi(v);
         else if (!strcasecmp(k, "StripRootMotion")) g_StripRoot = atoi(v);
         else if (!strcasecmp(k, "AutoAim")) g_AutoAim = atoi(v);
@@ -872,12 +873,13 @@ static void Tick()
     g_LastMs = now;
     if (dt > 0.25f) dt = 0.25f;
 
+    if (g_InfBar) g_Meter = 1.f;                                        // testing: the bar never drains
     if (g_Toggle.exchange(0)) { if (g_Active) StopBT("tap"); else StartBT(); }
 
     void* ped = g_FindPlayerPed ? g_FindPlayerPed(0) : nullptr;
     if (g_Active)
     {
-        g_Meter -= dt / g_Duration;
+        if (g_DS != DS_FLY) g_Meter -= dt / g_Duration;                 // the bar does not run dry in the middle of a dive
         if (g_Meter <= 0.f) { g_Meter = 0.f; StopBT("bar empty"); }
         else if (!g_RunOutPlayed && g_Meter * g_Duration <= g_RunOutLead) { g_RunOutPlayed = true; PlayOn(3, g_RunOut, g_RunOutVol); }
         if (g_Active && now >= g_NextBeat)
