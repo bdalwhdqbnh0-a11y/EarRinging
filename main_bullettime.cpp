@@ -217,7 +217,7 @@ static int   g_StripRoot = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
-static float g_CamDist = 2.6f, g_CamHeight = 0.7f, g_CamSide = 0.6f, g_CamLook = 10.f, g_CamSmooth = 7.f;
+static float g_CamDist = 2.2f, g_CamHeight = 0.55f, g_CamSide = 0.5f, g_CamLook = 0.6f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
@@ -545,7 +545,7 @@ static void CamWanted(void* ped, float* pos, float* look)
     float* b = PedPos(ped);
     float hl = sqrtf(g_DAim[0] * g_DAim[0] + g_DAim[1] * g_DAim[1]); float hx = hl > 1e-3f ? g_DAim[0] / hl : g_DFace[0], hy = hl > 1e-3f ? g_DAim[1] / hl : g_DFace[1];
     pos[0] = b[0] - hx * g_CamDist + hy * g_CamSide; pos[1] = b[1] - hy * g_CamDist - hx * g_CamSide; pos[2] = b[2] + g_CamHeight;
-    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] + 0.4f + g_DAim[2] * g_CamLook;
+    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] - 0.55f + g_DAim[2] * g_CamLook * 0.5f;
 }
 static void CamStart(void* ped)
 {
