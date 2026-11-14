@@ -738,6 +738,12 @@ static void DiveTick(void* ped, long long now)
     void* mine = FindAssocByHier(ped, g_DiveHier[g_DAnim] ? g_DiveHier[g_DAnim] : g_DiveHier[(g_DAnim / 3) * 3]);
     float mw = 0.f;
     if (mine) { mw = *(float*)((uint8_t*)mine + 0x30); g_DAssoc = mine; }
+    if (mine)
+    {   // hold the mod clip at full weight until its last 0.3 s (something fades it out half way through)
+        void* hh = *(void**)((uint8_t*)mine + 0x28);
+        float tot = hh ? *(float*)((uint8_t*)hh + 0x18) : 0.f, ct = *(float*)((uint8_t*)mine + 0x38);
+        if (tot > 0.5f && ct < tot - 0.3f) { float* d = (float*)((uint8_t*)mine + 0x34); float* w = (float*)((uint8_t*)mine + 0x30); if (*d < 0.f) *d = 0.f; if (*w < 1.f) *w = 1.f; mw = *w; }
+    }
     void* clump = *(void**)((uint8_t*)ped + 0x20);
     if (clump && mine && RpFirstAssoc && RpNextAssoc)
     {
