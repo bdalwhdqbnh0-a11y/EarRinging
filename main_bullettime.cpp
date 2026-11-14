@@ -209,6 +209,7 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
+static float g_LandWorld = 1.0f;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
@@ -277,6 +278,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveAnimBlend")) g_DiveAnimBlend = (float)atof(v);
         else if (!strcasecmp(k, "LandSlide")) g_LandSlide = (float)atof(v);
         else if (!strcasecmp(k, "DiveVolume")) g_DiveVol = (float)atof(v);
+        else if (!strcasecmp(k, "LandWorldSpeed")) g_LandWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveMaxDist")) g_DiveMaxDist = (float)atof(v);
@@ -546,8 +548,9 @@ static void CamWanted(void* ped, float* pos, float* look)
 {
     float* b = PedPos(ped);
     float hl = sqrtf(g_DAim[0] * g_DAim[0] + g_DAim[1] * g_DAim[1]); float hx = hl > 1e-3f ? g_DAim[0] / hl : g_DFace[0], hy = hl > 1e-3f ? g_DAim[1] / hl : g_DFace[1];
-    pos[0] = b[0] - hx * g_CamDist + hy * g_CamSide; pos[1] = b[1] - hy * g_CamDist - hx * g_CamSide; pos[2] = b[2] + g_CamHeight;
-    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] - 0.05f + g_DAim[2] * g_CamLook * 0.3f;
+    bool lnd = (g_DS == DS_LAND); float ch = lnd ? -0.15f : g_CamHeight;
+    pos[0] = b[0] - hx * g_CamDist + hy * g_CamSide; pos[1] = b[1] - hy * g_CamDist - hx * g_CamSide; pos[2] = b[2] + ch;
+    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] - (lnd ? 0.3f : 0.05f) + g_DAim[2] * g_CamLook * 0.3f;
 }
 static void CamStart(void* ped)
 {
@@ -832,7 +835,8 @@ static void Tick()
     else if (g_Refill > 0.f && g_Meter < 1.f) g_Meter = fminf(1.f, g_Meter + g_Refill * dt);
 
     // world speed
-    float target = g_Active ? (g_DS != DS_NONE ? g_DiveWorld : g_WorldSpeed) : 1.f;
+    float target = g_Active ? (g_DS == DS_LAND ? g_LandWorld : g_DS != DS_NONE ? g_DiveWorld : g_WorldSpeed) : 1.f;
+    if (g_Active && g_DS == DS_LAND) g_Scale = target;                  // crawl / get-up at normal speed, immediately
     float blend = g_Active ? g_BlendIn : g_BlendOut;
     float f = 1.f - powf(1.f - blend, dt * 30.f);
     g_Scale += (target - g_Scale) * f;
@@ -869,11 +873,12 @@ static void DrawAll_hook(bool b)
 {
     if (g_HideHud && g_DS != DS_NONE && g_Widgets && g_VtAttack)
     {   // during a dive only the fire / aim buttons are drawn
-        void* saved[190]; memcpy(saved, g_Widgets, sizeof(saved)); int kept = 0;
-        for (int i = 0; i < 190; ++i) { void* w = g_Widgets[i]; if (!w) continue; void* vt = *(void**)w; if (vt == g_VtAttack || vt == g_VtTarget) ++kept; else g_Widgets[i] = nullptr; }
+        void* saved[190]; memcpy(saved, g_Widgets, sizeof(saved)); int kept = 0; uint8_t en[190] = {0};
+        for (int i = 0; i < 190; ++i) { void* w = g_Widgets[i]; if (!w) continue; void* vt = *(void**)w; if (vt == g_VtAttack || vt == g_VtTarget) { ++kept; uint8_t* eb = (uint8_t*)w + 0x58; en[i] = *eb; *eb = 1; } else g_Widgets[i] = nullptr; }
         static int lg = 0; if (lg < 3) { ++lg; LOGI("hud: dive draw keeps %d widgets", kept); }
         DrawAll_orig(b);
         memcpy(g_Widgets, saved, sizeof(saved));
+        for (int i = 0; i < 190; ++i) if (saved[i]) { void* vt = *(void**)saved[i]; if (vt == g_VtAttack || vt == g_VtTarget) *((uint8_t*)saved[i] + 0x58) = en[i]; }
         return;
     }
     DrawAll_orig(b);
