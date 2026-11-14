@@ -214,10 +214,11 @@ static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire butto
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static int   g_StripRoot = 1;
+static int   g_HideHud = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
-static float g_CamDist = 2.2f, g_CamHeight = 0.55f, g_CamSide = 0.5f, g_CamLook = 0.6f, g_CamSmooth = 7.f;
+static float g_CamDist = 1.8f, g_CamHeight = 0.55f, g_CamSide = 0.55f, g_CamLook = 6.0f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
@@ -280,6 +281,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveMaxDist")) g_DiveMaxDist = (float)atof(v);
         else if (!strcasecmp(k, "FireZone")) sscanf(v, "%f,%f,%f,%f", &g_FireZone[0], &g_FireZone[1], &g_FireZone[2], &g_FireZone[3]);
+        else if (!strcasecmp(k, "HideHudInDive")) g_HideHud = atoi(v);
         else if (!strcasecmp(k, "StripRootMotion")) g_StripRoot = atoi(v);
         else if (!strcasecmp(k, "AutoAim")) g_AutoAim = atoi(v);
         else if (!strcasecmp(k, "TurnToTarget")) g_TurnToTarget = atoi(v);
@@ -287,9 +289,9 @@ static void LoadConfig()
         else if (!strcasecmp(k, "AimCone")) g_AimCone = (float)atof(v);
         else if (!strcasecmp(k, "CameraRear")) g_CamRear = atoi(v);
         else if (!strcasecmp(k, "CameraSwitch")) g_CamSwitch = atoi(v);
-        else if (!strcasecmp(k, "CameraDistance")) g_CamDist = (float)atof(v);
-        else if (!strcasecmp(k, "CameraHeight")) g_CamHeight = (float)atof(v);
-        else if (!strcasecmp(k, "CameraSide")) g_CamSide = (float)atof(v);
+        else if (!strcasecmp(k, "CameraDistance2")) g_CamDist = (float)atof(v);
+        else if (!strcasecmp(k, "CameraHeight2")) g_CamHeight = (float)atof(v);
+        else if (!strcasecmp(k, "CameraSide2")) g_CamSide = (float)atof(v);
         else if (!strcasecmp(k, "CameraSmooth")) g_CamSmooth = (float)atof(v);
         else if (!strcasecmp(k, "DiveGravity")) g_Grav = (float)atof(v);
         else if (!strcasecmp(k, "DiveMaxMs")) g_DiveMaxMs = atoi(v);
@@ -545,7 +547,7 @@ static void CamWanted(void* ped, float* pos, float* look)
     float* b = PedPos(ped);
     float hl = sqrtf(g_DAim[0] * g_DAim[0] + g_DAim[1] * g_DAim[1]); float hx = hl > 1e-3f ? g_DAim[0] / hl : g_DFace[0], hy = hl > 1e-3f ? g_DAim[1] / hl : g_DFace[1];
     pos[0] = b[0] - hx * g_CamDist + hy * g_CamSide; pos[1] = b[1] - hy * g_CamDist - hx * g_CamSide; pos[2] = b[2] + g_CamHeight;
-    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] - 0.55f + g_DAim[2] * g_CamLook * 0.5f;
+    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] - 0.05f + g_DAim[2] * g_CamLook * 0.3f;
 }
 static void CamStart(void* ped)
 {
@@ -745,6 +747,8 @@ static void DiveTick(void* ped, long long now)
         if (tot > 0.5f && ct < tot - 0.3f) { float* d = (float*)((uint8_t*)mine + 0x34); float* w = (float*)((uint8_t*)mine + 0x30); if (*d < 0.f) *d = 0.f; if (*w < 1.f) *w = 1.f; mw = *w; }
     }
     void* clump = *(void**)((uint8_t*)ped + 0x20);
+    bool fadeWin = false;
+    if (mine) { void* h0 = *(void**)((uint8_t*)mine + 0x28); float tt = h0 ? *(float*)((uint8_t*)h0 + 0x18) : 0.f, cc = *(float*)((uint8_t*)mine + 0x38); fadeWin = tt > 0.5f && cc >= tt - 0.3f; if (fadeWin) { float* d0 = (float*)((uint8_t*)mine + 0x34); if (*d0 > -4.f) *d0 = -4.f; } }
     if (clump && mine && RpFirstAssoc && RpNextAssoc)
     {
         int guard = 0;
@@ -755,7 +759,9 @@ static void DiveTick(void* ped, long long now)
             float lim = fmaxf(0.f, 1.f - mw);
             if (*amt > lim) *amt = lim;
             float* dl = (float*)((uint8_t*)a + 0x34);                  // blend delta: stop the game's own land / crawl / get-up clips from fading in
-            if (*dl > 0.f) *dl = -8.f;
+            void* hh2 = *(void**)((uint8_t*)a + 0x28); float tot2 = hh2 ? *(float*)((uint8_t*)hh2 + 0x18) : 0.f;
+            if (fadeWin && tot2 > 1.f) { if (*dl < 4.f) *dl = 4.f; }          // let the normal standing / idle pose blend back in so CJ never freezes
+            else if (*dl > 0.f) *dl = -8.f;
         }
     }
     float* pos = PedPos(ped); float* mv = PedMove(ped);
@@ -857,6 +863,21 @@ static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Enabled) Tick(); }
 
 // double tap in the zone starts / stops bullet time
 static long long g_LastTap = 0;
+typedef void (*DrawAll_t)(bool); static DrawAll_t DrawAll_orig = nullptr;
+static void** g_Widgets = nullptr; static void *g_VtAttack = nullptr, *g_VtTarget = nullptr;
+static void DrawAll_hook(bool b)
+{
+    if (g_HideHud && g_DS != DS_NONE && g_Widgets && g_VtAttack)
+    {   // during a dive only the fire / aim buttons are drawn
+        void* saved[190]; memcpy(saved, g_Widgets, sizeof(saved)); int kept = 0;
+        for (int i = 0; i < 190; ++i) { void* w = g_Widgets[i]; if (!w) continue; void* vt = *(void**)w; if (vt == g_VtAttack || vt == g_VtTarget) ++kept; else g_Widgets[i] = nullptr; }
+        static int lg = 0; if (lg < 3) { ++lg; LOGI("hud: dive draw keeps %d widgets", kept); }
+        DrawAll_orig(b);
+        memcpy(g_Widgets, saved, sizeof(saved));
+        return;
+    }
+    DrawAll_orig(b);
+}
 static void TouchEvent_hook(int action, int id, int x, int y)
 {
     TouchEvent_orig(action, id, x, y);
@@ -939,4 +960,10 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
 
     Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
     Install("_Z14AND_TouchEventiiii", (void*)TouchEvent_hook, &TouchEvent_orig);
+    g_Widgets = (void**)ResolveExact("_ZN15CTouchInterface10m_pWidgetsE");
+    uintptr_t va = ResolveExact("_ZTV19CWidgetButtonAttack"), vt = ResolveExact("_ZTV22CWidgetButtonTargeting");
+    if (va) g_VtAttack = (void*)(va + 16);
+    if (vt) g_VtTarget = (void*)(vt + 16);
+    LOGI("hud symbols: widgets=%p attack=%p target=%p", (void*)g_Widgets, g_VtAttack, g_VtTarget);
+    if (g_Widgets && g_VtAttack) Install("_ZN15CTouchInterface7DrawAllEb", (void*)DrawAll_hook, &DrawAll_orig);
 }
