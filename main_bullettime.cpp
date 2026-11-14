@@ -209,13 +209,13 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
-static float g_LandWorld = 1.0f, g_AirStretch = 1.4f, g_AirDist = 5.0f;
+static float g_LandWorld = 1.0f, g_AirStretch = 2.2f, g_AirDist = 10.0f;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static int   g_StripRoot = 1;
-static int   g_HideHud = 1, g_CamBack = 0;
+static int   g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -286,6 +286,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "LandSlideMax")) g_DiveMaxDist = (float)atof(v);
         else if (!strcasecmp(k, "FireZone")) sscanf(v, "%f,%f,%f,%f", &g_FireZone[0], &g_FireZone[1], &g_FireZone[2], &g_FireZone[3]);
         else if (!strcasecmp(k, "CameraFollowBack")) g_CamBack = atoi(v);
+        else if (!strcasecmp(k, "StickRelativeToCamera")) g_CamAxis = atoi(v);
         else if (!strcasecmp(k, "HideHudInDive")) g_HideHud = atoi(v);
         else if (!strcasecmp(k, "StripRootMotion")) g_StripRoot = atoi(v);
         else if (!strcasecmp(k, "AutoAim")) g_AutoAim = atoi(v);
@@ -633,6 +634,21 @@ static void StartDive(void* ped)
     float fwd[2] = { 0, 1 }, rgt[2] = { 1, 0 };
     if (m) { fwd[0] = m[4]; fwd[1] = m[5]; rgt[0] = m[0]; rgt[1] = m[1]; }   // matrix right = +0x00, forward = +0x10
     float fl = sqrtf(fwd[0] * fwd[0] + fwd[1] * fwd[1]); if (fl > 1e-3f) { fwd[0] /= fl; fwd[1] /= fl; }
+    if (g_CamAxis && g_TheCam)
+    {   // the stick is relative to the screen: "up" = where the game camera looks. Face CJ that way, so left / right / back follow the stick.
+        uint8_t idx = g_TheCam[0x5f];
+        if (idx < 3)
+        {
+            float* cf = (float*)(g_TheCam + 0x178 + (size_t)idx * 0x228 + 0x168); float cl = sqrtf(cf[0] * cf[0] + cf[1] * cf[1]);
+            if (cl > 0.3f)
+            {
+                fwd[0] = cf[0] / cl; fwd[1] = cf[1] / cl; rgt[0] = fwd[1]; rgt[1] = -fwd[0];
+                float nh = atan2f(-fwd[0], fwd[1]); uint8_t* pb2 = (uint8_t*)ped; *(float*)(pb2 + 0x6c4) = nh; *(float*)(pb2 + 0x6c8) = nh;
+                if (m) { m[4] = fwd[0]; m[5] = fwd[1]; m[0] = rgt[0]; m[1] = rgt[1]; }
+                LOGI("dive: stick axes from camera front=(%.2f,%.2f)", fwd[0], fwd[1]);
+            }
+        }
+    }
     int dir = 0;                                        // 0 fwd, 1 bkw, 2 left, 3 right
     if (abs(ud) < 30 && abs(lr) < 30) dir = 0;                         // stick centred: dive forward
     else if (abs(ud) >= abs(lr)) dir = ud > 0 ? 1 : 0;                   // log: stick up = negative
@@ -820,7 +836,7 @@ static void DiveTick(void* ped, long long now)
         pos[0] = g_DPos[0]; pos[1] = g_DPos[1]; pos[2] = g_DPos[2]; mv[0] = mv[1] = mv[2] = 0.f;
         static long long lastLog = 0; if (g_DiveLog && now - lastLog > 100 && el < 1500) { lastLog = now; LOGI("dive fly t=%lld z=%.2f vz=%.3f ground=%.2f steps=%.2f", el, g_DPos[2], g_DVz, gz, steps); }
         if (g_DVz < 0.f && g_DPos[2] - gz <= g_DOff + 0.01f && el > 100) { pos[2] = gz + g_DOff; g_DS = DS_LAND; g_RootInit = false; g_DTrav = 0.f; g_DLand = now; PlayOn(3, g_Active ? g_LandBt : g_LandS, g_DiveVol); LOGI("dive LAND after %lld ms z=%.2f ground=%.2f", el, pos[2], gz); }
-        else if (el > 3500) { EndDive(ped, "flight timeout"); return; }
+        else if (el > 9000) { EndDive(ped, "flight timeout"); return; }
         else if (g_AirAim || g_AirFire) AirShoot(ped, now);
     }
     else
