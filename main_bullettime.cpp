@@ -206,7 +206,7 @@ static int   g_Enabled = 1, g_Audio = 1, g_LogTouch = 1;
 static int   g_Dive = 1, g_DiveNeedBT = 1, g_AirAim = 1, g_AirFire = 1, g_DiveLog = 1;
 static float g_DiveUp = 0.075f, g_DiveSpeed = 0.11f;      // game units per time step (1 step = 1/50 s): 3.75 and 5.5 m/s
 static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone that starts a dive (disabled when empty)
-static int   g_DiveFlags = 0, g_FireGapMs = 140;
+static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
@@ -699,7 +699,7 @@ static void AirShoot(void* ped, long long nowReal)
     // 2) fire while the fire button is held
     if (!g_AirFire || !g_WFire || !g_PadWeapon || !g_GetPad) return;
     uint32_t gnow = g_GameMs ? *g_GameMs : 0;
-    if (g_NextFire && gnow < (uint32_t)g_NextFire) return;
+    if (g_NextFire && nowReal < g_NextFire) return;                // real-time gap: the weapon's own timers run in slowed game time and would allow one shot every ~2 s
     void* pad = g_GetPad(0);
     int fire = pad ? g_PadWeapon(pad, ped, false) : 0;
     for (int i = 0; i < 8 && !fire; ++i)                          // fallback: a finger on the fire button area counts as fire
@@ -707,16 +707,17 @@ static void AirShoot(void* ped, long long nowReal)
     if (!fire && g_FireTapAt && nowReal - g_FireTapAt < 400) fire = 1001;       // a quick tap lasts only a few frames: remember it
     static int dbg = 0, samp = 0;
     if (g_DiveLog && (samp++ % 20) == 0 && samp < 600) LOGI("dive: fire-button sample=%d target=%p", fire, g_Tgt);
-    if (g_DiveLog && dbg < 40 && fire) { ++dbg; LOGI("dive: fire button=%d", fire); }
+    if (g_DiveLog && dbg < 400 && fire) { ++dbg; LOGI("dive: fire button=%d", fire); }
     if (!fire) return;
     unsigned slot = pb[0x8dc];
     uint8_t* w = pb + 0x730 + slot * 32;
     int type = *(int*)w, state = *(int*)(w + 4), clip = *(int*)(w + 8);
-    if (type <= 0 || clip <= 0 || state != 0) { if (g_DiveLog && dbg < 40) { ++dbg; LOGI("dive: cannot fire type=%d state=%d clip=%d", type, state, clip); } return; }
+    if (type <= 0 || clip <= 0 || state < 0) { if (g_DiveLog && dbg < 400) { ++dbg; LOGI("dive: cannot fire type=%d state=%d clip=%d", type, state, clip); } return; }
     float eff[3] = { org[0] + g_DAim[0] * 0.6f, org[1] + g_DAim[1] * 0.6f, org[2] + g_DAim[2] * 0.6f };
+    *(int*)(w + 4) = 0; *(uint32_t*)(w + 0x10) = 0;                  // ready to fire again (its timers are slowed with the world)
     bool r = g_WFire(w, ped, org, eff, (g_AutoAim ? g_Tgt : nullptr), tgt, nullptr);
     g_FireTapAt = 0;
-    ++g_DShots; g_NextFire = (long long)gnow + g_FireGapMs;
+    ++g_DShots; g_NextFire = nowReal + g_FireGapMs;
     if (g_DiveLog && g_DShots <= 12) LOGI("dive: Fire() -> %d  clip %d -> %d state=%d", (int)r, clip, *(int*)(w + 8), *(int*)(w + 4));
 }
 
@@ -747,6 +748,8 @@ static void DiveTick(void* ped, long long now)
             float* amt = (float*)((uint8_t*)a + 0x30);
             float lim = fmaxf(0.f, 1.f - mw);
             if (*amt > lim) *amt = lim;
+            float* dl = (float*)((uint8_t*)a + 0x34);                  // blend delta: stop the game's own land / crawl / get-up clips from fading in
+            if (*dl > 0.f) *dl = -8.f;
         }
     }
     float* pos = PedPos(ped); float* mv = PedMove(ped);
