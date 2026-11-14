@@ -207,14 +207,15 @@ static int   g_Dive = 1, g_DiveNeedBT = 1, g_AirAim = 1, g_AirFire = 1, g_DiveLo
 static float g_DiveUp = 0.075f, g_DiveSpeed = 0.11f;      // game units per time step (1 step = 1/50 s): 3.75 and 5.5 m/s
 static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone that starts a dive (disabled when empty)
 static int   g_DiveFlags = 0, g_FireGapMs = 140;
-static float g_DiveAnimBlend = 8.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
+static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 4500;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.35f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
-static float g_FireZone[4] = { 0.72f, 0.45f, 0.86f, 0.72f };   // touch area of the on-screen fire button (fractions of the screen)
+static float g_FireZone[4] = { 0.72f, 0.64f, 0.84f, 0.82f };   // from the log: taps at (0.79,0.72) and (0.78,0.74)
+static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
-static int   g_CamRear = 1, g_CamSwitch = 1;
+static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
 static float g_CamDist = 2.6f, g_CamHeight = 0.7f, g_CamSide = 0.6f, g_CamLook = 10.f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
@@ -556,6 +557,9 @@ static void CamTick(void* ped, long long now)
         float* src = (float*)(c + 0x138); src[0] = g_CamP[0]; src[1] = g_CamP[1]; src[2] = g_CamP[2];
         float* tv = (float*)(c + 0x12c); tv[0] = look[0]; tv[1] = look[1]; tv[2] = look[2];
         c[2] = 1;
+        static long long lt = 0;
+        if (g_DiveLog && now - lt > 250) { lt = now; float* es = (float*)(c + 0x174); float* ef = (float*)(c + 0x168); float* pp = PedPos(ped);
+            LOGI("camera track: ped=(%.1f,%.1f,%.1f) set=(%.1f,%.1f,%.1f) engine_src=(%.1f,%.1f,%.1f) front=(%.2f,%.2f,%.2f) mode=%u", pp[0], pp[1], pp[2], g_CamP[0], g_CamP[1], g_CamP[2], es[0], es[1], es[2], ef[0], ef[1], ef[2], *(uint16_t*)(g_TheCam + 0x186 + (size_t)idx * 0x228)); }
     }
 }
 static void CamStop()
@@ -679,6 +683,7 @@ static void AirShoot(void* ped, long long nowReal)
     int fire = pad ? g_PadWeapon(pad, ped, false) : 0;
     for (int i = 0; i < 8 && !fire; ++i)                          // fallback: a finger on the fire button area counts as fire
         if (g_TouchDown[i] && g_TouchX[i] >= g_FireZone[0] && g_TouchX[i] <= g_FireZone[2] && g_TouchY[i] >= g_FireZone[1] && g_TouchY[i] <= g_FireZone[3]) fire = 1000;
+    if (!fire && g_FireTapAt && nowReal - g_FireTapAt < 400) fire = 1001;       // a quick tap lasts only a few frames: remember it
     static int dbg = 0, samp = 0;
     if (g_DiveLog && (samp++ % 20) == 0 && samp < 600) LOGI("dive: fire-button sample=%d target=%p", fire, g_Tgt);
     if (g_DiveLog && dbg < 40 && fire) { ++dbg; LOGI("dive: fire button=%d", fire); }
@@ -689,6 +694,7 @@ static void AirShoot(void* ped, long long nowReal)
     if (type <= 0 || clip <= 0 || state != 0) { if (g_DiveLog && dbg < 40) { ++dbg; LOGI("dive: cannot fire type=%d state=%d clip=%d", type, state, clip); } return; }
     float eff[3] = { org[0] + g_DAim[0] * 0.6f, org[1] + g_DAim[1] * 0.6f, org[2] + g_DAim[2] * 0.6f };
     bool r = g_WFire(w, ped, org, eff, (g_AutoAim ? g_Tgt : nullptr), tgt, nullptr);
+    g_FireTapAt = 0;
     ++g_DShots; g_NextFire = (long long)gnow + g_FireGapMs;
     if (g_DiveLog && g_DShots <= 12) LOGI("dive: Fire() -> %d  clip %d -> %d state=%d", (int)r, clip, *(int*)(w + 8), *(int*)(w + 4));
 }
@@ -819,7 +825,8 @@ static void TouchEvent_hook(int action, int id, int x, int y)
     if (!g_Enabled) return;
     {
         int W0 = OS_W ? OS_W() : 0, H0 = OS_H ? OS_H() : 0;
-        if (id >= 0 && id < 8 && W0 > 0 && H0 > 0) { g_TouchDown[id] = (action == 2 || action == 3); g_TouchX[id] = (float)x / W0; g_TouchY[id] = (float)y / H0; }
+        if (id >= 0 && id < 8 && W0 > 0 && H0 > 0) { g_TouchDown[id] = (action == 2 || action == 3); g_TouchX[id] = (float)x / W0; g_TouchY[id] = (float)y / H0;
+            if (action == 2 && g_TouchX[id] >= g_FireZone[0] && g_TouchX[id] <= g_FireZone[2] && g_TouchY[id] >= g_FireZone[1] && g_TouchY[id] <= g_FireZone[3]) g_FireTapAt = NowMs(); }
         static int dl = 0;
         if (g_DS != 0 && action != 3 && dl < 120) { ++dl; LOGI("dive touch action=%d id=%d at (%.2f,%.2f)", action, id, W0 > 0 ? (float)x / W0 : 0.f, H0 > 0 ? (float)y / H0 : 0.f); }
     }
