@@ -209,7 +209,7 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
-static float g_LandWorld = 1.0f;
+static float g_LandWorld = 1.0f, g_AirStretch = 1.4f;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
@@ -278,6 +278,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveAnimBlend")) g_DiveAnimBlend = (float)atof(v);
         else if (!strcasecmp(k, "LandSlide")) g_LandSlide = (float)atof(v);
         else if (!strcasecmp(k, "DiveVolume")) g_DiveVol = (float)atof(v);
+        else if (!strcasecmp(k, "DiveAirStretch")) g_AirStretch = fminf(3.f, fmaxf(1.f, (float)atof(v)));
         else if (!strcasecmp(k, "LandWorldSpeed")) g_LandWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
@@ -463,6 +464,16 @@ static IsAlive_t g_IsAlive = nullptr; static void** g_PedPoolSym = nullptr;
 static void* g_DiveBlock = nullptr;
 static void* g_DiveHier[14];
 static bool  g_DiveLoaded = false;
+struct RootTab { std::vector<float> t, x, y; float tG = 0.f; };
+static RootTab g_RootTab[14]; static bool g_RootInit = false; static float g_RootPrev = 0.f;
+static void RootAt(const RootTab& r, float t, float& ox, float& oy)
+{
+    if (r.t.empty()) { ox = oy = 0.f; return; }
+    if (t < r.tG) t = r.tG;
+    size_t n = r.t.size(); if (t <= r.t[0]) { ox = r.x[0]; oy = r.y[0]; return; } if (t >= r.t[n - 1]) { ox = r.x[n - 1]; oy = r.y[n - 1]; return; }
+    size_t i = 1; while (i < n && r.t[i] < t) ++i;
+    float u = (t - r.t[i - 1]) / fmaxf(1e-4f, r.t[i] - r.t[i - 1]); ox = r.x[i - 1] + (r.x[i] - r.x[i - 1]) * u; oy = r.y[i - 1] + (r.y[i] - r.y[i - 1]) * u;
+}
 static const char* kDiveNames[14] = { "sd_dive_fwd","sd_dive_fwd_2h","sd_dive_fwd_dual","sd_dive_bkw","sd_dive_bkw_2h","sd_dive_bkw_dual",
     "sd_dive_left","sd_dive_left_2h","sd_dive_left_dual","sd_dive_right","sd_dive_right_2h","sd_dive_right_dual","sd_reload","sd_reload_2h" };
 
@@ -490,13 +501,25 @@ static void LoadDiveAnims()
         uint8_t* d = data.data(); size_t sz = data.size(); uint32_t n = *(uint32_t*)(d + 32); size_t o = 36; int stripped = 0;
         for (uint32_t i = 0; i < n && o + 36 <= sz; ++i)
         {
+            int clipIdx = -1; for (int q = 0; q < 14; ++q) if (strncmp((const char*)(d + o), kDiveNames[q], 24) == 0) clipIdx = q;
+            static RootTab dummyRoot;
             bool dive = strncmp((const char*)(d + o), "sd_dive", 7) == 0; uint32_t nobj = *(uint32_t*)(d + o + 24); o += 36;
             for (uint32_t j = 0; j < nobj && o + 36 <= sz; ++j)
             {
                 uint32_t t = *(uint32_t*)(d + o + 24), fc = *(uint32_t*)(d + o + 28); o += 36;
                 size_t fsz = (t == 3) ? 10 : 16;
                 if (o + fsz * fc > sz) { o = sz; break; }
-                if (dive && t == 4) { for (uint32_t k = 0; k < fc; ++k) { int16_t* pp = (int16_t*)(d + o + k * 16 + 10); pp[0] = 0; pp[1] = 0; } ++stripped; }
+                if (dive && t == 4)
+                {
+                    RootTab& curRoot = clipIdx >= 0 ? g_RootTab[clipIdx] : dummyRoot; curRoot = RootTab();
+                    for (uint32_t k = 0; k < fc; ++k) { int16_t* pp = (int16_t*)(d + o + k * 16 + 10); curRoot.t.push_back(*(int16_t*)(d + o + k * 16 + 8) / 60.f); curRoot.x.push_back(pp[0] / 1024.f); curRoot.y.push_back(pp[1] / 1024.f); pp[0] = 0; pp[1] = 0; } ++stripped;
+                    {   // the lying plateau (root stops moving) ends where the get-up starts
+                        size_t bestLen = 0, bestEnd = 0, run = 0;
+                        for (size_t k = 1; k < curRoot.t.size(); ++k) { float ddx = curRoot.x[k] - curRoot.x[k - 1], ddy = curRoot.y[k] - curRoot.y[k - 1]; if (ddx * ddx + ddy * ddy < 0.0004f) { ++run; if (run > bestLen) { bestLen = run; bestEnd = k; } } else run = 0; }
+                        curRoot.tG = bestLen >= 3 ? curRoot.t[bestEnd] : 0.f;
+                        LOGI("dive: clip %d root travel %.2f m, get-up starts at %.2f s", clipIdx, curRoot.y.empty() ? 0.f : curRoot.y.back(), curRoot.tG);
+                    }
+                }
                 o += fsz * fc;
             }
         }
@@ -780,7 +803,7 @@ static void DiveTick(void* ped, long long now)
     }
     uint32_t gnow = g_GameMs ? *g_GameMs : 0;
     float steps = (gnow - g_DLastG) / 20.f; g_DLastG = gnow;
-    if (g_Scale < 0.999f) steps *= fminf(g_DiveCJ / g_Scale, 6.f);       // CJ's own clock runs faster than the slowed world (same factor as his animation)          // game time steps (1 step = 1/50 s, already slowed by the time scale)
+    if (g_Scale < 0.999f) steps *= fminf((g_DS == DS_FLY ? g_DiveCJ / g_AirStretch : g_DiveCJ) / g_Scale, 6.f);       // CJ's own clock runs faster than the slowed world (same factor as his animation)          // game time steps (1 step = 1/50 s, already slowed by the time scale)
     if (steps < 0.f || steps > 6.f) steps = 0.f;
     if (g_DS == DS_FLY)
     {
@@ -791,12 +814,23 @@ static void DiveTick(void* ped, long long now)
         if (g_DPos[2] - gz < g_DOff) g_DPos[2] = gz + g_DOff;
         pos[0] = g_DPos[0]; pos[1] = g_DPos[1]; pos[2] = g_DPos[2]; mv[0] = mv[1] = mv[2] = 0.f;
         static long long lastLog = 0; if (g_DiveLog && now - lastLog > 100 && el < 1500) { lastLog = now; LOGI("dive fly t=%lld z=%.2f vz=%.3f ground=%.2f steps=%.2f", el, g_DPos[2], g_DVz, gz, steps); }
-        if (g_DVz < 0.f && g_DPos[2] - gz <= g_DOff + 0.01f && el > 100) { pos[2] = gz + g_DOff; g_DS = DS_LAND; g_DLand = now; PlayOn(3, g_Active ? g_LandBt : g_LandS, g_DiveVol); LOGI("dive LAND after %lld ms z=%.2f ground=%.2f", el, pos[2], gz); }
+        if (g_DVz < 0.f && g_DPos[2] - gz <= g_DOff + 0.01f && el > 100) { pos[2] = gz + g_DOff; g_DS = DS_LAND; g_RootInit = false; g_DLand = now; PlayOn(3, g_Active ? g_LandBt : g_LandS, g_DiveVol); LOGI("dive LAND after %lld ms z=%.2f ground=%.2f", el, pos[2], gz); }
         else if (el > 3500) { EndDive(ped, "flight timeout"); return; }
         else if (g_AirAim || g_AirFire) AirShoot(ped, now);
     }
     else
     {
+        if (mine)
+        {   // the get-up part of the clip moves CJ forward (he runs off): do that physically too, so he does not snap back at the end
+            float ct = *(float*)((uint8_t*)mine + 0x38); const RootTab& rt = g_RootTab[g_DAnim];
+            if (!g_RootInit) { g_RootInit = true; g_RootPrev = ct; }
+            else if (ct > g_RootPrev)
+            {
+                float x0, y0, x1, y1; RootAt(rt, g_RootPrev, x0, y0); RootAt(rt, ct, x1, y1); g_RootPrev = ct;
+                float* m = PedMat(ped); float dx = x1 - x0, dy = y1 - y0;
+                if (m) { g_DPos[0] += m[0] * dx + m[4] * dy; g_DPos[1] += m[1] * dx + m[5] * dy; }
+            }
+        }
         float k = g_LandSlide;                                    // slide on the ground, fading out
         g_DHv[0] *= powf(0.93f, steps); g_DHv[1] *= powf(0.93f, steps);
         if (g_DTrav < g_DiveMaxDist) { float dx = g_DHv[0] * steps * k, dy = g_DHv[1] * steps * k; g_DPos[0] += dx; g_DPos[1] += dy; g_DTrav += sqrtf(dx * dx + dy * dy); }
@@ -848,7 +882,7 @@ static void Tick()
     // CJ
     if (ped)
     {
-        if (g_Active && g_Scale < 0.999f) { if (g_TrPed != ped) { g_Tr.clear(); g_TrPed = ped; } ApplyCJSpeed(ped, fminf((g_DS != DS_NONE ? g_DiveCJ : g_CJSpeed) / g_Scale, 6.f)); }
+        if (g_Active && g_Scale < 0.999f) { if (g_TrPed != ped) { g_Tr.clear(); g_TrPed = ped; } ApplyCJSpeed(ped, fminf((g_DS == DS_FLY ? g_DiveCJ / g_AirStretch : g_DS != DS_NONE ? g_DiveCJ : g_CJSpeed) / g_Scale, 6.f)); }
         else if (!g_Tr.empty()) RestoreCJSpeed(ped);
     }
 
