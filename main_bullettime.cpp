@@ -209,13 +209,13 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
-static float g_LandWorld = 1.0f, g_AirStretch = 1.4f;
-static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
+static float g_LandWorld = 1.0f, g_AirStretch = 1.4f, g_AirDist = 5.0f;
+static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static int   g_StripRoot = 1;
-static int   g_HideHud = 1;
+static int   g_HideHud = 1, g_CamBack = 0;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -278,12 +278,14 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveAnimBlend")) g_DiveAnimBlend = (float)atof(v);
         else if (!strcasecmp(k, "LandSlide")) g_LandSlide = (float)atof(v);
         else if (!strcasecmp(k, "DiveVolume")) g_DiveVol = (float)atof(v);
+        else if (!strcasecmp(k, "DiveAirDistance")) g_AirDist = fminf(15.f, fmaxf(1.f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveAirStretch")) g_AirStretch = fminf(3.f, fmaxf(1.f, (float)atof(v)));
         else if (!strcasecmp(k, "LandWorldSpeed")) g_LandWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
-        else if (!strcasecmp(k, "DiveMaxDist")) g_DiveMaxDist = (float)atof(v);
+        else if (!strcasecmp(k, "LandSlideMax")) g_DiveMaxDist = (float)atof(v);
         else if (!strcasecmp(k, "FireZone")) sscanf(v, "%f,%f,%f,%f", &g_FireZone[0], &g_FireZone[1], &g_FireZone[2], &g_FireZone[3]);
+        else if (!strcasecmp(k, "CameraFollowBack")) g_CamBack = atoi(v);
         else if (!strcasecmp(k, "HideHudInDive")) g_HideHud = atoi(v);
         else if (!strcasecmp(k, "StripRootMotion")) g_StripRoot = atoi(v);
         else if (!strcasecmp(k, "AutoAim")) g_AutoAim = atoi(v);
@@ -570,10 +572,12 @@ static bool g_CamOn = false; static float g_CamP[3] = {0,0,0}; static long long 
 static void CamWanted(void* ped, float* pos, float* look)
 {
     float* b = PedPos(ped);
-    float hl = sqrtf(g_DAim[0] * g_DAim[0] + g_DAim[1] * g_DAim[1]); float hx = hl > 1e-3f ? g_DAim[0] / hl : g_DFace[0], hy = hl > 1e-3f ? g_DAim[1] / hl : g_DFace[1];
+    float ax = g_DAim[0], ay = g_DAim[1], az = g_DAim[2];
+    if (g_CamBack) { float vl = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); if (vl > 1e-4f) { ax = g_DHv[0] / vl; ay = g_DHv[1] / vl; az = 0.f; } }   // camera stays behind CJ's back, along the direction he dives
+    float hl = sqrtf(ax * ax + ay * ay); float hx = hl > 1e-3f ? ax / hl : g_DFace[0], hy = hl > 1e-3f ? ay / hl : g_DFace[1];
     bool lnd = (g_DS == DS_LAND); float ch = lnd ? -0.15f : g_CamHeight;
     pos[0] = b[0] - hx * g_CamDist + hy * g_CamSide; pos[1] = b[1] - hy * g_CamDist - hx * g_CamSide; pos[2] = b[2] + ch;
-    look[0] = b[0] + g_DAim[0] * g_CamLook; look[1] = b[1] + g_DAim[1] * g_CamLook; look[2] = b[2] - (lnd ? 0.3f : 0.05f) + g_DAim[2] * g_CamLook * 0.3f;
+    look[0] = b[0] + ax * g_CamLook; look[1] = b[1] + ay * g_CamLook; look[2] = b[2] - (lnd ? 0.3f : 0.05f) + az * g_CamLook * 0.3f;
 }
 static void CamStart(void* ped)
 {
@@ -644,7 +648,8 @@ static void StartDive(void* ped)
     void* clump = *(void**)((uint8_t*)ped + 0x20);
     if (!h || !clump || !g_Blend) { LOGE("dive: no hierarchy/clump/blend (h=%p clump=%p)", h, clump); return; }
     g_DAssoc = g_Blend(clump, h, g_DiveFlags, g_DiveAnimBlend);
-    g_DHv[0] = hv[0] * g_DiveSpeed; g_DHv[1] = hv[1] * g_DiveSpeed;
+    float airSteps = 2.f * g_DiveUp / fmaxf(1e-5f, g_Grav / 2500.f), spd = g_AirDist / fmaxf(5.f, airSteps);   // horizontal speed so that the air part covers exactly AirDist metres
+    g_DHv[0] = hv[0] * spd; g_DHv[1] = hv[1] * spd;
     g_DAim[0] = fwd[0]; g_DAim[1] = fwd[1]; g_DAim[2] = 0.f; g_DFace[0] = fwd[0]; g_DFace[1] = fwd[1]; g_Tgt = nullptr; g_LastPick = 0;
     float* mv = PedMove(ped); mv[0] = mv[1] = mv[2] = 0.f;
     g_DPos[0] = PedPos(ped)[0]; g_DPos[1] = PedPos(ped)[1]; g_DPos[2] = PedPos(ped)[2];
@@ -807,14 +812,14 @@ static void DiveTick(void* ped, long long now)
     if (steps < 0.f || steps > 6.f) steps = 0.f;
     if (g_DS == DS_FLY)
     {
-        { float dx = g_DHv[0] * steps, dy = g_DHv[1] * steps; if (g_DTrav < g_DiveMaxDist) { g_DPos[0] += dx; g_DPos[1] += dy; g_DTrav += sqrtf(dx * dx + dy * dy); } }
+        { float dx = g_DHv[0] * steps, dy = g_DHv[1] * steps; if (g_DTrav < g_AirDist + 0.5f) { g_DPos[0] += dx; g_DPos[1] += dy; g_DTrav += sqrtf(dx * dx + dy * dy); } }
         g_DPos[2] += g_DVz * steps;   // our own absolute position (physics would snap CJ back)
         g_DVz -= (g_Grav / 2500.f) * steps;                          // m/s^2 -> units per step^2
         float gz = g_GroundZ ? g_GroundZ(g_DPos[0], g_DPos[1]) : g_DPos[2] - g_DOff;
         if (g_DPos[2] - gz < g_DOff) g_DPos[2] = gz + g_DOff;
         pos[0] = g_DPos[0]; pos[1] = g_DPos[1]; pos[2] = g_DPos[2]; mv[0] = mv[1] = mv[2] = 0.f;
         static long long lastLog = 0; if (g_DiveLog && now - lastLog > 100 && el < 1500) { lastLog = now; LOGI("dive fly t=%lld z=%.2f vz=%.3f ground=%.2f steps=%.2f", el, g_DPos[2], g_DVz, gz, steps); }
-        if (g_DVz < 0.f && g_DPos[2] - gz <= g_DOff + 0.01f && el > 100) { pos[2] = gz + g_DOff; g_DS = DS_LAND; g_RootInit = false; g_DLand = now; PlayOn(3, g_Active ? g_LandBt : g_LandS, g_DiveVol); LOGI("dive LAND after %lld ms z=%.2f ground=%.2f", el, pos[2], gz); }
+        if (g_DVz < 0.f && g_DPos[2] - gz <= g_DOff + 0.01f && el > 100) { pos[2] = gz + g_DOff; g_DS = DS_LAND; g_RootInit = false; g_DTrav = 0.f; g_DLand = now; PlayOn(3, g_Active ? g_LandBt : g_LandS, g_DiveVol); LOGI("dive LAND after %lld ms z=%.2f ground=%.2f", el, pos[2], gz); }
         else if (el > 3500) { EndDive(ped, "flight timeout"); return; }
         else if (g_AirAim || g_AirFire) AirShoot(ped, now);
     }
