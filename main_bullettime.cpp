@@ -755,6 +755,14 @@ static void DiveTick(void* ped, long long now)
     float* pos = PedPos(ped); float* mv = PedMove(ped);
     long long el = now - g_DStart;
     CamTick(ped, now);
+    if (g_DiveLog && g_DS == DS_LAND && clump && RpFirstAssoc && RpNextAssoc)
+    {
+        static long long la = 0; static int cnt = 0;
+        if (now - la > 500 && cnt < 40) { la = now; ++cnt; int g2 = 0; char buf[400]; int n = 0;
+            for (void* a2 = RpFirstAssoc(clump); a2 && g2 < 12; a2 = RpNextAssoc(a2), ++g2)
+                n += snprintf(buf + n, sizeof(buf) - n > 0 ? sizeof(buf) - n : 0, " [%s w=%.2f d=%.1f t=%.2f/%.2f]", a2 == mine ? "MINE" : "game", *(float*)((uint8_t*)a2 + 0x30), *(float*)((uint8_t*)a2 + 0x34), *(float*)((uint8_t*)a2 + 0x38), *(void**)((uint8_t*)a2 + 0x28) ? *(float*)(*(uint8_t**)((uint8_t*)a2 + 0x28) + 0x18) : 0.f);
+            LOGI("land assocs:%s", buf); }
+    }
     uint32_t gnow = g_GameMs ? *g_GameMs : 0;
     float steps = (gnow - g_DLastG) / 20.f; g_DLastG = gnow;
     if (g_Scale < 0.999f) steps *= fminf(g_DiveCJ / g_Scale, 6.f);       // CJ's own clock runs faster than the slowed world (same factor as his animation)          // game time steps (1 step = 1/50 s, already slowed by the time scale)
