@@ -213,6 +213,7 @@ static float g_DiveWorld = 0.15f, g_DiveCJ = 0.35f, g_DiveMaxDist = 5.0f, g_DTra
 static float g_FireZone[4] = { 0.72f, 0.64f, 0.84f, 0.82f };   // from the log: taps at (0.79,0.72) and (0.78,0.74)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
+static int   g_StripRoot = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -279,6 +280,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveMaxDist")) g_DiveMaxDist = (float)atof(v);
         else if (!strcasecmp(k, "FireZone")) sscanf(v, "%f,%f,%f,%f", &g_FireZone[0], &g_FireZone[1], &g_FireZone[2], &g_FireZone[3]);
+        else if (!strcasecmp(k, "StripRootMotion")) g_StripRoot = atoi(v);
         else if (!strcasecmp(k, "AutoAim")) g_AutoAim = atoi(v);
         else if (!strcasecmp(k, "TurnToTarget")) g_TurnToTarget = atoi(v);
         else if (!strcasecmp(k, "AimRange")) g_AimRange = (float)atof(v);
@@ -477,6 +479,25 @@ static void LoadDiveAnims()
         if (!data.empty()) { LOGI("dive: ifp %s%s (%zu bytes)", g_Dir.c_str(), t, data.size()); break; }
     }
     if (data.empty() || memcmp(data.data(), "ANP3", 4) != 0) { LOGE("dive: MP3SD.ifp missing or not ANP3 (put it in %sanims/)", g_Dir.c_str()); return; }
+    if (g_StripRoot)
+    {
+        // The dive clips carry ~4-6 m of root-bone travel. Our own flight physics already moves CJ, so the model would drift away
+        // from his real position (and from the camera). Zero the root X/Y translation of the dive clips in memory.
+        uint8_t* d = data.data(); size_t sz = data.size(); uint32_t n = *(uint32_t*)(d + 32); size_t o = 36; int stripped = 0;
+        for (uint32_t i = 0; i < n && o + 36 <= sz; ++i)
+        {
+            bool dive = strncmp((const char*)(d + o), "sd_dive", 7) == 0; uint32_t nobj = *(uint32_t*)(d + o + 24); o += 36;
+            for (uint32_t j = 0; j < nobj && o + 36 <= sz; ++j)
+            {
+                uint32_t t = *(uint32_t*)(d + o + 24), fc = *(uint32_t*)(d + o + 28); o += 36;
+                size_t fsz = (t == 3) ? 10 : 16;
+                if (o + fsz * fc > sz) { o = sz; break; }
+                if (dive && t == 4) { for (uint32_t k = 0; k < fc; ++k) { int16_t* pp = (int16_t*)(d + o + k * 16 + 10); pp[0] = 0; pp[1] = 0; } ++stripped; }
+                o += fsz * fc;
+            }
+        }
+        LOGI("dive: root motion removed from %d clips", stripped);
+    }
     char block[25] = {0}; memcpy(block, data.data() + 8, 24);
     void* b = g_RegBlock(block);
     RwMemory mem = { data.data(), (uint32_t)data.size() };
