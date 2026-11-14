@@ -208,9 +208,9 @@ static float g_DiveUp = 0.075f, g_DiveSpeed = 0.11f;      // game units per time
 static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone that starts a dive (disabled when empty)
 static int   g_DiveFlags = 0, g_FireGapMs = 140;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
-static int   g_DiveMaxMs = 4500;
-static float g_DiveWorld = 0.15f, g_DiveCJ = 0.35f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
-static float g_FireZone[4] = { 0.72f, 0.64f, 0.84f, 0.82f };   // from the log: taps at (0.79,0.72) and (0.78,0.74)
+static int   g_DiveMaxMs = 14000;
+static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 5.0f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
+static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static int   g_StripRoot = 1;
