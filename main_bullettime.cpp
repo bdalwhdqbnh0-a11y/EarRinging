@@ -209,7 +209,7 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
-static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f, g_SwipeSens = 4.5f; static long long g_JumpLeadMs = 220;
+static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f, g_SwipeSens = 2.4f; static long long g_JumpLeadMs = 220;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireBtn[2] = { 0.13f, 0.62f }, g_AimBtn[2] = { 0.88f, 0.30f };   // dive buttons: fire on the radar side, aim on the weapon side (screen fractions)
 static inline bool InAimZone(float x, float y) { return fabsf(x - g_AimBtn[0]) <= 0.09f && fabsf(y - g_AimBtn[1]) <= 0.17f; }
@@ -1090,7 +1090,7 @@ static void TouchEvent_hook(int action, int id, int x, int y)
             if (g_DS != 0 && action == 3 && g_TouchX[id] > 0.3f && !InFireZone(g_TouchX[id], g_TouchY[id]) && !InAimZone(g_TouchX[id], g_TouchY[id]))
             {
                 float ddx = g_TouchX[id] - g_LastTX[id], ddy = g_TouchY[id] - g_LastTY[id];
-                if (fabsf(ddx) < 0.2f && fabsf(ddy) < 0.2f) { g_AdjYaw -= ddx * g_SwipeSens; g_AdjPitch -= ddy * g_SwipeSens * 0.6f; if (g_AdjPitch > 1.0f) g_AdjPitch = 1.0f; if (g_AdjPitch < -1.0f) g_AdjPitch = -1.0f; g_SwipeAt = NowMs(); }
+                if (fabsf(ddx) < 0.2f && fabsf(ddy) < 0.2f) { { float dy_ = -ddx * g_SwipeSens; if (dy_ > 0.07f) dy_ = 0.07f; if (dy_ < -0.07f) dy_ = -0.07f; g_AdjYaw += dy_; } g_AdjPitch -= ddy * g_SwipeSens * 0.6f; if (g_AdjPitch > 1.0f) g_AdjPitch = 1.0f; if (g_AdjPitch < -1.0f) g_AdjPitch = -1.0f; g_SwipeAt = NowMs(); }
             }
             g_LastTX[id] = g_TouchX[id]; g_LastTY[id] = g_TouchY[id]; }
         static int dl = 0;
