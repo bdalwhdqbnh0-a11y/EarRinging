@@ -209,7 +209,7 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
-static float g_LandWorld = 1.0f, g_AirStretch = 2.2f, g_AirDist = 10.0f;
+static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f; static long long g_JumpLeadMs = 220;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
@@ -219,7 +219,7 @@ static int   g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
-static float g_CamDist = 1.8f, g_CamHeight = 0.55f, g_CamSide = 0.55f, g_CamLook = 6.0f, g_CamSmooth = 7.f;
+static float g_CamDist = 1.35f, g_CamHeight = 0.45f, g_CamSide = 0.4f, g_CamLook = 6.0f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
@@ -279,6 +279,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "LandSlide")) g_LandSlide = (float)atof(v);
         else if (!strcasecmp(k, "DiveVolume")) g_DiveVol = (float)atof(v);
         else if (!strcasecmp(k, "DiveAirDistance")) g_AirDist = fminf(15.f, fmaxf(1.f, (float)atof(v)));
+        else if (!strcasecmp(k, "DiveJumpLeadMs")) g_JumpLeadMs = atoll(v);
         else if (!strcasecmp(k, "DiveAirStretch")) g_AirStretch = fminf(3.f, fmaxf(1.f, (float)atof(v)));
         else if (!strcasecmp(k, "LandWorldSpeed")) g_LandWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
@@ -781,7 +782,14 @@ static void DiveTick(void* ped, long long now)
     {
         bool req = g_DiveTouch.exchange(0) != 0;
         if (g_JumpDown && g_GetPad) { void* pad = g_GetPad(0); if (pad && g_JumpDown(pad)) req = true; }
-        if (req && (g_Active || !g_DiveNeedBT)) StartDive(ped);
+        static long long leadAt = 0;
+        if (req && !leadAt && (g_Active || !g_DiveNeedBT)) leadAt = now + (g_JumpLeadMs > 0 ? g_JumpLeadMs : 1);   // let the game's own jump take-off play first
+        if (leadAt)
+        {
+            if (!g_Active && g_DiveNeedBT) leadAt = 0;
+            else if (now >= leadAt) { leadAt = 0; StartDive(ped); }
+            else if (g_Scale < 0.999f) ApplyCJSpeed(ped, fminf(g_DiveCJ / g_Scale, 6.f));
+        }
         return;
     }
     // keep the dive animation on top, silence the others
@@ -931,7 +939,7 @@ static void DrawAll_hook(bool b)
     if (g_HideHud && g_DS != DS_NONE && g_Widgets && g_VtAttack)
     {   // during a dive only the fire / aim buttons are drawn
         void* saved[190]; memcpy(saved, g_Widgets, sizeof(saved)); int kept = 0; uint8_t en[190] = {0};
-        for (int i = 0; i < 190; ++i) { void* w = g_Widgets[i]; if (!w) continue; void* vt = *(void**)w; if (vt == g_VtAttack || vt == g_VtTarget) { ++kept; uint8_t* eb = (uint8_t*)w + 0x58; en[i] = *eb; *eb = 1; } else g_Widgets[i] = nullptr; }
+        for (int i = 0; i < 190; ++i) { void* w = g_Widgets[i]; if (!w) continue; void* vt = *(void**)w; if (vt == g_VtAttack || vt == g_VtTarget) { ++kept; uint8_t* eb = (uint8_t*)w + 0x58; en[i] = *eb; if (*eb < 150) *eb = 220; /* byte +0x58 = button alpha (0 = hidden) */ } else g_Widgets[i] = nullptr; }
         static int lg = 0; if (lg < 3) { ++lg; LOGI("hud: dive draw keeps %d widgets", kept); }
         DrawAll_orig(b);
         memcpy(g_Widgets, saved, sizeof(saved));
