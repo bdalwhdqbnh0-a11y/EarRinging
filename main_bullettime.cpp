@@ -219,7 +219,7 @@ static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZone(g_TouchX[i], g_TouchY[i])) return true; return false; }
 static int   g_StripRoot = 1;
-static int   g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
+static int   g_CamAnim = 1, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -294,6 +294,8 @@ static void LoadConfig()
         else if (!strcasecmp(k, "AimButtonPos")) sscanf(v, "%f,%f", &g_AimBtn[0], &g_AimBtn[1]);
         else if (!strcasecmp(k, "CameraFollowBack")) g_CamBack = atoi(v);
         else if (!strcasecmp(k, "StickRelativeToCamera")) g_CamAxis = atoi(v);
+        else if (!strcasecmp(k, "CameraDrivesAnimation")) g_CamAnim = atoi(v);
+        else if (!strcasecmp(k, "AirSteering")) g_AirSteer = atoi(v);
         else if (!strcasecmp(k, "BackwardTurnsRound")) g_BackTurn = atoi(v);
         else if (!strcasecmp(k, "InfiniteBar")) g_InfBar = atoi(v);
         else if (!strcasecmp(k, "HideHudInDive")) g_HideHud = atoi(v);
@@ -639,6 +641,7 @@ static void CamStop()
 }
 
 static int g_StkLR = 0, g_StkUD = 0; static long long g_StkAt = 0;
+static float g_CF[2] = {0, 1}, g_CR[2] = {1, 0}; static int g_CurDir = 0, g_PendDir = -1; static long long g_SwitchAt = 0, g_PendAt = 0;
 static void StartDive(void* ped)
 {
     if (!g_DiveBlock) { LOGE("dive: animations not loaded"); return; }
@@ -664,10 +667,12 @@ static void StartDive(void* ped)
             }
         }
     }
+    g_CF[0] = fwd[0]; g_CF[1] = fwd[1]; g_CR[0] = rgt[0]; g_CR[1] = rgt[1]; g_SwitchAt = 0; g_PendDir = -1;
     int dir = 0;                                        // 0 fwd, 1 bkw, 2 left, 3 right
     if (abs(ud) < 22 && abs(lr) < 22) dir = 0;                         // stick centred: dive forward
     else if (abs(ud) >= abs(lr)) dir = ud > 0 ? 1 : 0;                   // log: stick up = negative
     else dir = lr > 0 ? 3 : 2;
+    g_CurDir = dir;
     if (dir == 1 && g_BackTurn)
     {   // "backward": CJ turns round and dives away from the camera (seen from behind), instead of falling on his back towards it
         dir = 0; fwd[0] = -fwd[0]; fwd[1] = -fwd[1]; rgt[0] = -rgt[0]; rgt[1] = -rgt[1];
@@ -871,6 +876,66 @@ static void DiveTick(void* ped, long long now)
     float steps = (gnow - g_DLastG) / 20.f; g_DLastG = gnow;
     if (g_Scale < 0.999f) steps *= fminf((g_DS == DS_FLY ? g_DiveCJ / g_AirStretch : g_DiveCJ) / g_Scale, 6.f);       // CJ's own clock runs faster than the slowed world (same factor as his animation)          // game time steps (1 step = 1/50 s, already slowed by the time scale)
     if (steps < 0.f || steps > 6.f) steps = 0.f;
+    if (g_DS == DS_FLY && g_CamAnim && el > 150)
+    {   // the animation follows the camera: it depends on where CJ is flying relative to where the camera / aim looks
+        float ax = g_DAim[0], ay = g_DAim[1], al = sqrtf(ax * ax + ay * ay), hl2 = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]);
+        if (al > 0.2f && hl2 > 1e-5f)
+        {
+            ax /= al; ay /= al; float hx = g_DHv[0] / hl2, hy = g_DHv[1] / hl2;
+            float f = hx * ax + hy * ay, r = hx * ay - hy * ax;                 // r > 0: flying to the right of the camera
+            float a = atan2f(r, f) * 57.29578f;                                 // 0 fwd, 90 right, +-180 back, -90 left
+            static const float ctr[4] = { 0.f, 180.f, -90.f, 90.f };            // fwd, bkw, left, right
+            float dc = fabsf(a - ctr[g_CurDir]); if (g_CurDir == 1) dc = 180.f - fabsf(a); else if (dc > 180.f) dc = 360.f - dc;
+            if (dc > 57.f)                                                      // 45 degrees + 12 of hysteresis
+            {
+                int nd = fabsf(a) <= 45.f ? 0 : fabsf(a) >= 135.f ? 1 : (a < 0 ? 2 : 3);
+                int var = g_DAnim % 3; void* h2 = g_DiveHier[nd * 3 + var] ? g_DiveHier[nd * 3 + var] : g_DiveHier[nd * 3]; void* cl = *(void**)((uint8_t*)ped + 0x20);
+                if (nd != g_CurDir && h2 && cl && g_Blend && now - g_SwitchAt > 250)
+                {
+                    float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
+                    void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
+                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); *(float*)((uint8_t*)na + 0x38) = fminf(oldCt, tt - 0.1f); g_DAssoc = na; }
+                    g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
+                    LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
+                }
+            }
+        }
+    }
+    if (g_DS == DS_FLY && g_AirSteer && g_GetPad && g_WalkLR && g_WalkUD && el > 150)
+    {   // steering in the air: push the stick another way and CJ changes his dive (animation + direction)
+        void* pd = g_GetPad(0); int lr = pd ? g_WalkLR(pd) : 0, ud = pd ? g_WalkUD(pd) : 0;
+        if (abs(lr) >= 45 || abs(ud) >= 45)
+        {
+            int nd = (abs(ud) >= abs(lr)) ? (ud > 0 ? 1 : 0) : (lr > 0 ? 3 : 2);
+            if (nd != g_CurDir)
+            {
+                if (g_PendDir != nd) { g_PendDir = nd; g_PendAt = now; }
+                else if (now - g_PendAt > 90 && now - g_SwitchAt > 350)
+                {
+                    int ad = nd; float fx = g_CF[0], fy = g_CF[1], hx, hy;
+                    if (nd == 0) { hx = g_CF[0]; hy = g_CF[1]; }
+                    else if (nd == 1) { hx = -g_CF[0]; hy = -g_CF[1]; if (g_BackTurn) { ad = 0; fx = -g_CF[0]; fy = -g_CF[1]; } }
+                    else if (nd == 2) { hx = -g_CR[0]; hy = -g_CR[1]; }
+                    else { hx = g_CR[0]; hy = g_CR[1]; }
+                    int var = g_DAnim % 3; void* h2 = g_DiveHier[ad * 3 + var] ? g_DiveHier[ad * 3 + var] : g_DiveHier[ad * 3];
+                    void* cl = *(void**)((uint8_t*)ped + 0x20);
+                    if (h2 && cl && g_Blend)
+                    {
+                        float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
+                        void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
+                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); *(float*)((uint8_t*)na + 0x38) = fminf(oldCt, tt - 0.1f); g_DAssoc = na; }
+                        g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1;
+                        float sp = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); g_DHv[0] = hx * sp; g_DHv[1] = hy * sp;
+                        g_DFace[0] = fx; g_DFace[1] = fy; if (!g_Tgt && !(g_SwipeAt && now - g_SwipeAt < 2500)) { g_DAim[0] = fx; g_DAim[1] = fy; g_DAim[2] = 0.f; }
+                        float nh = atan2f(-fx, fy); uint8_t* pb4 = (uint8_t*)ped; *(float*)(pb4 + 0x6c4) = nh; *(float*)(pb4 + 0x6c8) = nh; *(float*)(pb4 + 0x918) = nh;
+                        float* m4 = PedMat(ped); if (m4) { m4[4] = fx; m4[5] = fy; m4[0] = fy; m4[1] = -fx; }
+                        LOGI("dive: steer in the air -> dir %d (anim %d) at %lld ms", nd, g_DAnim, el);
+                    }
+                }
+            }
+            else g_PendDir = -1;
+        }
+    }
     if (g_DS == DS_FLY)
     {
         { float dx = g_DHv[0] * steps, dy = g_DHv[1] * steps; if (g_DTrav < g_AirDist + 0.5f) { g_DPos[0] += dx; g_DPos[1] += dy; g_DTrav += sqrtf(dx * dx + dy * dy); } }
