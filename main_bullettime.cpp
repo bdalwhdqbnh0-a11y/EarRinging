@@ -223,7 +223,7 @@ static int   g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
-static float g_CamDist = 1.35f, g_CamHeight = 0.45f, g_CamSide = 0.4f, g_CamLook = 6.0f, g_CamSmooth = 7.f;
+static float g_CamDist = 2.3f, g_CamHeight = 0.95f, g_CamSide = 0.95f, g_CamLook = 9.0f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
