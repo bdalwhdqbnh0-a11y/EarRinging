@@ -219,6 +219,7 @@ static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZone(g_TouchX[i], g_TouchY[i])) return true; return false; }
 static int   g_StripRoot = 1;
+static int   g_TorsoTwist = 1; static float g_TwistMax = 1.35f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 1.2f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
 static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
@@ -317,6 +318,8 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveMaxMs")) g_DiveMaxMs = atoi(v);
         else if (!strcasecmp(k, "FireGapMs")) g_FireGapMs = atoi(v);
         else if (!strcasecmp(k, "AirSwitchMax")) g_AirSwitchMax = atoi(v);
+        else if (!strcasecmp(k, "TorsoTwist")) g_TorsoTwist = atoi(v);
+        else if (!strcasecmp(k, "TwistMax")) g_TwistMax = fminf(3.1f, fmaxf(0.3f, (float)atof(v)));
         else if (!strcasecmp(k, "AimYawLimit")) g_YawLimit = fminf(3.1f, fmaxf(0.1f, (float)atof(v)));
     }
     fclose(f);
@@ -745,6 +748,23 @@ static void* PickTarget(void* ped, const float* org, const float* dir, float* ou
     return best;
 }
 
+// Turn CJ towards the aim. With TorsoTwist the legs / hips keep the dive direction and only the upper body (arm + torso IK from PointGunAtPosition,
+// head from the look angle at +0x918) follows the aim; the whole ped turns only by the part of the angle that is beyond TwistMax.
+static void TurnBody(void* ped, float want, float blend)
+{
+    uint8_t* pb = (uint8_t*)ped; float* rc = (float*)(pb + 0x6c4); float* ra = (float*)(pb + 0x6c8);
+    float goal = want;
+    if (g_TorsoTwist)
+    {
+        float face = atan2f(-g_DFace[0], g_DFace[1]);
+        float d = want - face; while (d > 3.14159265f) d -= 6.2831853f; while (d < -3.14159265f) d += 6.2831853f;
+        goal = fabsf(d) <= g_TwistMax ? face : want - (d > 0.f ? g_TwistMax : -g_TwistMax);
+    }
+    float diff = goal - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
+    float nh = *rc + diff * blend; *rc = nh; *ra = goal; *(float*)(pb + 0x918) = want;   // the game pulls the heading back every frame: write current, target and look angle
+    float* m = PedMat(ped); if (m) { m[4] = -sinf(nh); m[5] = cosf(nh); m[0] = cosf(nh); m[1] = sinf(nh); }
+}
+
 static void AirShoot(void* ped, long long nowReal)
 {
     // 1) point the arms (IK) at a target in front of CJ
@@ -758,10 +778,7 @@ static void AirShoot(void* ped, long long nowReal)
     {
         float a0 = atan2f(g_DFace[1], g_DFace[0]) + g_AdjYaw, cp = cosf(g_AdjPitch);
         g_DAim[0] = cosf(a0) * cp; g_DAim[1] = sinf(a0) * cp; g_DAim[2] = sinf(g_AdjPitch); g_Tgt = nullptr;
-        float want = atan2f(-g_DAim[0], g_DAim[1]); float* rc = (float*)(pb + 0x6c4); float* ra = (float*)(pb + 0x6c8);
-        float diff = want - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
-        float nh = *rc + diff * 0.9f; *rc = nh; *ra = want; *(float*)(pb + 0x918) = want;   // the game pulls the heading back every frame: write current, target and look angle
-        float* m = PedMat(ped); if (m) { m[4] = -sinf(nh); m[5] = cosf(nh); m[0] = cosf(nh); m[1] = sinf(nh); }
+        TurnBody(ped, atan2f(-g_DAim[0], g_DAim[1]), 0.9f);
     }
     if (g_AutoAim && !manual)
     {
@@ -777,11 +794,7 @@ static void AirShoot(void* ped, long long nowReal)
             float dx = tp[0] - org[0], dy = tp[1] - org[1], dz = tp[2] - org[2]; float L = sqrtf(dx * dx + dy * dy + dz * dz); if (L > 0.1f) { g_DAim[0] = dx / L; g_DAim[1] = dy / L; g_DAim[2] = dz / L; }
             if (g_TurnToTarget)
             {
-                float want = atan2f(-dx, dy);
-                float* rc = (float*)(pb + 0x6c4); float* ra = (float*)(pb + 0x6c8);
-                float diff = want - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
-                float nh = *rc + diff * 0.7f; *rc = nh; *ra = want; *(float*)(pb + 0x918) = want;
-                float* m = PedMat(ped); if (m) { m[4] = -sinf(nh); m[5] = cosf(nh); m[0] = cosf(nh); m[1] = sinf(nh); }
+                TurnBody(ped, atan2f(-dx, dy), 0.7f);
             }
         }
         else g_Tgt = nullptr;
