@@ -585,9 +585,12 @@ static void CamWanted(void* ped, float* pos, float* look)
     float ax = g_DAim[0], ay = g_DAim[1], az = g_DAim[2];
     if (g_CamBack) { float vl = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); if (vl > 1e-4f) { ax = g_DHv[0] / vl; ay = g_DHv[1] / vl; az = 0.f; } }   // camera stays behind CJ's back, along the direction he dives
     float hl = sqrtf(ax * ax + ay * ay); float hx = hl > 1e-3f ? ax / hl : g_DFace[0], hy = hl > 1e-3f ? ay / hl : g_DFace[1];
-    bool lnd = (g_DS == DS_LAND); float ch = lnd ? -0.15f : g_CamHeight;
-    pos[0] = b[0] - hx * g_CamDist + hy * g_CamSide; pos[1] = b[1] - hy * g_CamDist - hx * g_CamSide; pos[2] = b[2] + ch;
-    look[0] = b[0] + ax * g_CamLook; look[1] = b[1] + ay * g_CamLook; look[2] = b[2] - (lnd ? 0.3f : 0.05f) + az * g_CamLook * 0.3f;
+    bool lnd = (g_DS == DS_LAND); int cd = g_DAnim / 3;
+    float dm = cd == 1 ? 1.8f : (cd >= 2 ? 1.25f : 1.f);          // backward dive: CJ flies towards the camera, keep it well away; sideways: a bit further
+    if (lnd) dm = fmaxf(dm, 1.3f);
+    float ch = (lnd ? 0.35f : g_CamHeight) * (cd == 1 ? 1.35f : 1.f), D = g_CamDist * dm, S2 = g_CamSide * (cd == 1 ? 1.3f : 1.f);
+    pos[0] = b[0] - hx * D + hy * S2; pos[1] = b[1] - hy * D - hx * S2; pos[2] = b[2] + ch;
+    look[0] = b[0] + ax * g_CamLook; look[1] = b[1] + ay * g_CamLook; look[2] = b[2] - (lnd ? 0.15f : 0.05f) + az * g_CamLook * 0.3f;
 }
 static void CamStart(void* ped)
 {
