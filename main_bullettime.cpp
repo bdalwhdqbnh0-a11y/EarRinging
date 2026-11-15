@@ -209,7 +209,7 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
-static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f; static long long g_JumpLeadMs = 220;
+static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f, g_SwipeSens = 3.2f; static long long g_JumpLeadMs = 220;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireBtn[2] = { 0.13f, 0.62f }, g_AimBtn[2] = { 0.88f, 0.30f };   // dive buttons: fire on the radar side, aim on the weapon side (screen fractions)
 static inline bool InAimZone(float x, float y) { return fabsf(x - g_AimBtn[0]) <= 0.09f && fabsf(y - g_AimBtn[1]) <= 0.17f; }
@@ -289,6 +289,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "LandSlideMax")) g_DiveMaxDist = (float)atof(v);
+        else if (!strcasecmp(k, "AimSwipeSens")) g_SwipeSens = (float)atof(v);
         else if (!strcasecmp(k, "FireButtonPos")) sscanf(v, "%f,%f", &g_FireBtn[0], &g_FireBtn[1]);
         else if (!strcasecmp(k, "AimButtonPos")) sscanf(v, "%f,%f", &g_AimBtn[0], &g_AimBtn[1]);
         else if (!strcasecmp(k, "CameraFollowBack")) g_CamBack = atoi(v);
@@ -470,6 +471,7 @@ static PadBool_t g_JumpDown; static PadAxis_t g_WalkLR, g_WalkUD; static PadWeap
 static WeaponFire_t g_WFire; static GetBonePos_t g_GetBone; static FindGroundZ_t g_GroundZ; static uint32_t* g_GameMs;
 typedef bool (*IsAlive_t)(void*);
 static void* g_Tgt = nullptr; static long long g_LastPick = 0;
+static float g_AdjYaw = 0.f, g_AdjPitch = 0.f, g_LastTX[8] = {0}, g_LastTY[8] = {0}; static long long g_SwipeAt = 0; // swipe on the screen during a dive = aim by hand
 static IsAlive_t g_IsAlive = nullptr; static void** g_PedPoolSym = nullptr;
 static void* g_DiveBlock = nullptr;
 static void* g_DiveHier[14];
@@ -673,7 +675,7 @@ static void StartDive(void* ped)
     g_DAssoc = g_Blend(clump, h, g_DiveFlags, g_DiveAnimBlend);
     float airSteps = 2.f * g_DiveUp / fmaxf(1e-5f, g_Grav / 2500.f), spd = g_AirDist / fmaxf(5.f, airSteps);   // horizontal speed so that the air part covers exactly AirDist metres
     g_DHv[0] = hv[0] * spd; g_DHv[1] = hv[1] * spd;
-    g_DAim[0] = fwd[0]; g_DAim[1] = fwd[1]; g_DAim[2] = 0.f; g_DFace[0] = fwd[0]; g_DFace[1] = fwd[1]; g_Tgt = nullptr; g_LastPick = 0;
+    g_DAim[0] = fwd[0]; g_DAim[1] = fwd[1]; g_DAim[2] = 0.f; g_DFace[0] = fwd[0]; g_DFace[1] = fwd[1]; g_Tgt = nullptr; g_LastPick = 0; g_AdjYaw = g_AdjPitch = 0.f; g_SwipeAt = 0;
     float* mv = PedMove(ped); mv[0] = mv[1] = mv[2] = 0.f;
     g_DPos[0] = PedPos(ped)[0]; g_DPos[1] = PedPos(ped)[1]; g_DPos[2] = PedPos(ped)[2];
     g_DTrav = 0.f; g_DVz = g_DiveUp; g_DLastG = g_GameMs ? *g_GameMs : 0;
@@ -727,7 +729,17 @@ static void AirShoot(void* ped, long long nowReal)
     float* pos = PedPos(ped);
     if (g_GetBone) g_GetBone(ped, org, 24, false); else { org[0] = pos[0]; org[1] = pos[1]; org[2] = pos[2]; }   // bone 24 = right hand
     float tgt[3];
-    if (g_AutoAim)
+    bool manual = g_SwipeAt && nowReal - g_SwipeAt < 2500;        // a finger moved on the screen recently: the aim follows the finger, not the nearest enemy
+    if (manual)
+    {
+        float a0 = atan2f(g_DFace[1], g_DFace[0]) + g_AdjYaw, cp = cosf(g_AdjPitch);
+        g_DAim[0] = cosf(a0) * cp; g_DAim[1] = sinf(a0) * cp; g_DAim[2] = sinf(g_AdjPitch); g_Tgt = nullptr;
+        float want = atan2f(-g_DAim[0], g_DAim[1]); float* rc = (float*)(pb + 0x6c4); float* ra = (float*)(pb + 0x6c8);
+        float diff = want - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
+        float nh = *rc + diff * 0.3f; *rc = nh; *ra = nh;
+        float* m = PedMat(ped); if (m) { m[4] = -sinf(nh); m[5] = cosf(nh); m[0] = cosf(nh); m[1] = sinf(nh); }
+    }
+    if (g_AutoAim && !manual)
     {
         float tp[3];
         if (nowReal - g_LastPick > 150 || !g_Tgt)
@@ -943,8 +955,10 @@ static void (*g_DrawRect)(const float*, const uint8_t*) = nullptr;
 static void DrawBar(float x0, float y0, float x1, float y1, const uint8_t* col) { float r[4] = { x0, y1, x1, y0 }; g_DrawRect(r, col); }   // CRect = left, bottom, right, top
 static void DrawCrosshair()
 {
-    if (!g_Tgt || !g_IsAlive || !g_IsAlive(g_Tgt) || !g_CalcScr || !g_DrawRect || !OS_H) return;
-    float* tp = PedPos(g_Tgt); float in[3] = { tp[0], tp[1], tp[2] + 0.3f }, out[3], w = 0, h = 0;
+    if (g_DS != DS_FLY || !g_CalcScr || !g_DrawRect || !OS_H) return;
+    float in[3], out[3], w = 0, h = 0;
+    if (g_Tgt && g_IsAlive && g_IsAlive(g_Tgt)) { float* tp = PedPos(g_Tgt); in[0] = tp[0]; in[1] = tp[1]; in[2] = tp[2] + 0.3f; }
+    else { in[0] = g_DPos[0] + g_DAim[0] * 25.f; in[1] = g_DPos[1] + g_DAim[1] * 25.f; in[2] = g_DPos[2] + 0.3f + g_DAim[2] * 25.f; }   // no enemy: the point where the gun is aimed
     if (!g_CalcScr(in, out, &w, &h, true, true)) return;
     float k = (float)OS_H() / 1080.f, x = out[0], y = out[1], t = 2.5f * k, a = 14.f * k, bgap = 34.f * k;
     static const uint8_t red[4] = { 255, 40, 40, 235 }, yel[4] = { 255, 220, 0, 255 };
@@ -987,7 +1001,13 @@ static void TouchEvent_hook(int action, int id, int x, int y)
     {
         int W0 = OS_W ? OS_W() : 0, H0 = OS_H ? OS_H() : 0;
         if (id >= 0 && id < 8 && W0 > 0 && H0 > 0) { g_TouchDown[id] = (action == 2 || action == 3); g_TouchX[id] = (float)x / W0; g_TouchY[id] = (float)y / H0;
-            if (action == 2 && InFireZone(g_TouchX[id], g_TouchY[id])) g_FireTapAt = NowMs(); }
+            if (action == 2 && InFireZone(g_TouchX[id], g_TouchY[id])) g_FireTapAt = NowMs();
+            if (g_DS != 0 && action == 3 && g_TouchX[id] > 0.3f && !InFireZone(g_TouchX[id], g_TouchY[id]) && !InAimZone(g_TouchX[id], g_TouchY[id]))
+            {
+                float ddx = g_TouchX[id] - g_LastTX[id], ddy = g_TouchY[id] - g_LastTY[id];
+                if (fabsf(ddx) < 0.2f && fabsf(ddy) < 0.2f) { g_AdjYaw -= ddx * g_SwipeSens; g_AdjPitch -= ddy * g_SwipeSens * 0.6f; if (g_AdjPitch > 1.0f) g_AdjPitch = 1.0f; if (g_AdjPitch < -1.0f) g_AdjPitch = -1.0f; g_SwipeAt = NowMs(); }
+            }
+            g_LastTX[id] = g_TouchX[id]; g_LastTY[id] = g_TouchY[id]; }
         static int dl = 0;
         if (g_DS != 0 && action != 3 && dl < 120) { ++dl; LOGI("dive touch action=%d id=%d at (%.2f,%.2f)", action, id, W0 > 0 ? (float)x / W0 : 0.f, H0 > 0 ? (float)y / H0 : 0.f); }
     }
