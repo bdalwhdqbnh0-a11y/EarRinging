@@ -226,6 +226,7 @@ static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated 
 static float g_CamDist = 2.3f, g_CamHeight = 0.95f, g_CamSide = 0.95f, g_CamLook = 9.0f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
+static float g_SwTime = 0.f; static long long g_SwUntil = 0;
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
 
 static void LoadConfig()
@@ -838,6 +839,7 @@ static void DiveTick(void* ped, long long now)
     void* mine = FindAssocByHier(ped, g_DiveHier[g_DAnim] ? g_DiveHier[g_DAnim] : g_DiveHier[(g_DAnim / 3) * 3]);
     float mw = 0.f;
     if (mine) { mw = *(float*)((uint8_t*)mine + 0x30); g_DAssoc = mine; }
+    if (mine && now < g_SwUntil) { float* ctp = (float*)((uint8_t*)mine + 0x38); if (*ctp < g_SwTime) { LOGI("dive: switch time fix %.2f -> %.2f", *ctp, g_SwTime); *ctp = g_SwTime; } }   // the engine restarted the new clip at 0: put it back in the flight phase
     if (mine)
     {   // hold the mod clip at full weight until its last 0.3 s (something fades it out half way through)
         void* hh = *(void**)((uint8_t*)mine + 0x28);
@@ -895,7 +897,7 @@ static void DiveTick(void* ped, long long now)
                 {
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                     void* na = g_Blend(cl, h2, g_DiveFlags, 3.0f);            // slow cross-fade (0.33 s), the new clip continues at the same time
-                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); *(float*)((uint8_t*)na + 0x38) = fminf(oldCt, tt - 0.1f); g_DAssoc = na; }
+                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = fminf(fmaxf(oldCt, 0.55f), tt - 0.1f); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 400; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
                     if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -3.0f;      // the old clip fades out over the same 0.33 s and is removed
                     g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
