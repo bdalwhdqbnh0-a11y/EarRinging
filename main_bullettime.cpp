@@ -680,6 +680,7 @@ static void StartDive(void* ped)
         if (m) { m[4] = fwd[0]; m[5] = fwd[1]; m[0] = rgt[0]; m[1] = rgt[1]; }
         LOGI("dive: backward = turn round and dive away from the camera");
     }
+    g_CurDir = dir;                                       // the animation actually played (after the turn-round)
     float hv[2] = { fwd[0], fwd[1] };
     if (dir == 1) { hv[0] = -fwd[0]; hv[1] = -fwd[1]; }
     else if (dir == 2) { hv[0] = -rgt[0]; hv[1] = -rgt[1]; }
@@ -890,11 +891,12 @@ static void DiveTick(void* ped, long long now)
             {
                 int nd = fabsf(a) <= 45.f ? 0 : fabsf(a) >= 135.f ? 1 : (a < 0 ? 2 : 3);
                 int var = g_DAnim % 3; void* h2 = g_DiveHier[nd * 3 + var] ? g_DiveHier[nd * 3 + var] : g_DiveHier[nd * 3]; void* cl = *(void**)((uint8_t*)ped + 0x20);
-                if (nd != g_CurDir && h2 && cl && g_Blend && now - g_SwitchAt > 250)
+                if (nd != g_CurDir && (g_DAnim / 3) != nd && h2 && cl && g_Blend && now - g_SwitchAt > 250)
                 {
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
-                    void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
+                    void* na = g_Blend(cl, h2, g_DiveFlags, 3.0f);            // slow cross-fade (0.33 s), the new clip continues at the same time
                     if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); *(float*)((uint8_t*)na + 0x38) = fminf(oldCt, tt - 0.1f); g_DAssoc = na; }
+                    if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -3.0f;      // the old clip fades out over the same 0.33 s and is removed
                     g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
                 }
