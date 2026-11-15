@@ -211,6 +211,8 @@ static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
 static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f; static long long g_JumpLeadMs = 220;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
+static float g_FireBtn[2] = { 0.13f, 0.62f }, g_AimBtn[2] = { 0.88f, 0.30f };   // dive buttons: fire on the radar side, aim on the weapon side (screen fractions)
+static inline bool InFireZone(float x, float y) { return fabsf(x - g_FireBtn[0]) <= 0.09f && fabsf(y - g_FireBtn[1]) <= 0.17f; }
 static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
@@ -285,7 +287,8 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveWorldSpeed")) g_DiveWorld = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "DiveCJSpeed")) g_DiveCJ = fminf(1.f, fmaxf(0.03f, (float)atof(v)));
         else if (!strcasecmp(k, "LandSlideMax")) g_DiveMaxDist = (float)atof(v);
-        else if (!strcasecmp(k, "FireZone")) sscanf(v, "%f,%f,%f,%f", &g_FireZone[0], &g_FireZone[1], &g_FireZone[2], &g_FireZone[3]);
+        else if (!strcasecmp(k, "FireButtonPos")) sscanf(v, "%f,%f", &g_FireBtn[0], &g_FireBtn[1]);
+        else if (!strcasecmp(k, "AimButtonPos")) sscanf(v, "%f,%f", &g_AimBtn[0], &g_AimBtn[1]);
         else if (!strcasecmp(k, "CameraFollowBack")) g_CamBack = atoi(v);
         else if (!strcasecmp(k, "StickRelativeToCamera")) g_CamAxis = atoi(v);
         else if (!strcasecmp(k, "InfiniteBar")) g_InfBar = atoi(v);
@@ -754,7 +757,7 @@ static void AirShoot(void* ped, long long nowReal)
     void* pad = g_GetPad(0);
     int fire = pad ? g_PadWeapon(pad, ped, false) : 0;
     for (int i = 0; i < 8 && !fire; ++i)                          // fallback: a finger on the fire button area counts as fire
-        if (g_TouchDown[i] && g_TouchX[i] >= g_FireZone[0] && g_TouchX[i] <= g_FireZone[2] && g_TouchY[i] >= g_FireZone[1] && g_TouchY[i] <= g_FireZone[3]) fire = 1000;
+        if (g_TouchDown[i] && InFireZone(g_TouchX[i], g_TouchY[i])) fire = 1000;
     if (!fire && g_FireTapAt && nowReal - g_FireTapAt < 400) fire = 1001;       // a quick tap lasts only a few frames: remember it
     static int dbg = 0, samp = 0;
     if (g_DiveLog && (samp++ % 20) == 0 && samp < 600) LOGI("dive: fire-button sample=%d target=%p", fire, g_Tgt);
@@ -938,12 +941,21 @@ static void DrawAll_hook(bool b)
 {
     if (g_HideHud && g_DS != DS_NONE && g_Widgets && g_VtAttack)
     {   // during a dive only the fire / aim buttons are drawn
-        void* saved[190]; memcpy(saved, g_Widgets, sizeof(saved)); int kept = 0; uint8_t en[190] = {0};
-        for (int i = 0; i < 190; ++i) { void* w = g_Widgets[i]; if (!w) continue; void* vt = *(void**)w; if (vt == g_VtAttack || vt == g_VtTarget) { ++kept; uint8_t* eb = (uint8_t*)w + 0x58; en[i] = *eb; if (*eb < 150) *eb = 220; /* byte +0x58 = button alpha (0 = hidden) */ } else g_Widgets[i] = nullptr; }
+        void* saved[190]; memcpy(saved, g_Widgets, sizeof(saved)); int kept = 0; uint8_t en[190] = {0}; float rc0[190][4];
+        float SW = OS_W ? (float)OS_W() : 0.f, SH = OS_H ? (float)OS_H() : 0.f;
+        for (int i = 0; i < 190; ++i) { void* w = g_Widgets[i]; if (!w) continue; void* vt = *(void**)w; if (vt == g_VtAttack || vt == g_VtTarget) { ++kept; uint8_t* eb = (uint8_t*)w + 0x58; en[i] = *eb; if (*eb < 150) *eb = 220; /* byte +0x58 = button alpha (0 = hidden) */
+            float* r = (float*)((uint8_t*)w + 0x2c); memcpy(rc0[i], r, 16);
+            if (SW > 100.f && SH > 100.f)
+            {   // fire button -> radar side, aim button -> weapon side
+                const float* tp = (vt == g_VtAttack) ? g_FireBtn : g_AimBtn;
+                float cx = (r[0] + r[2]) * 0.5f, cy = (r[1] + r[3]) * 0.5f, dx = tp[0] * SW - cx, dy = tp[1] * SH - cy;
+                static int lr = 0; if (lr < 4) { ++lr; LOGI("hud: widget %s rect=(%.0f,%.0f,%.0f,%.0f) -> shift (%.0f,%.0f)", vt == g_VtAttack ? "fire" : "aim", r[0], r[1], r[2], r[3], dx, dy); }
+                r[0] += dx; r[2] += dx; r[1] += dy; r[3] += dy;
+            } } else g_Widgets[i] = nullptr; }
         static int lg = 0; if (lg < 3) { ++lg; LOGI("hud: dive draw keeps %d widgets", kept); }
         DrawAll_orig(b);
         memcpy(g_Widgets, saved, sizeof(saved));
-        for (int i = 0; i < 190; ++i) if (saved[i]) { void* vt = *(void**)saved[i]; if (vt == g_VtAttack || vt == g_VtTarget) *((uint8_t*)saved[i] + 0x58) = en[i]; }
+        for (int i = 0; i < 190; ++i) if (saved[i]) { void* vt = *(void**)saved[i]; if (vt == g_VtAttack || vt == g_VtTarget) { *((uint8_t*)saved[i] + 0x58) = en[i]; memcpy((uint8_t*)saved[i] + 0x2c, rc0[i], 16); } }
         return;
     }
     DrawAll_orig(b);
@@ -955,7 +967,7 @@ static void TouchEvent_hook(int action, int id, int x, int y)
     {
         int W0 = OS_W ? OS_W() : 0, H0 = OS_H ? OS_H() : 0;
         if (id >= 0 && id < 8 && W0 > 0 && H0 > 0) { g_TouchDown[id] = (action == 2 || action == 3); g_TouchX[id] = (float)x / W0; g_TouchY[id] = (float)y / H0;
-            if (action == 2 && g_TouchX[id] >= g_FireZone[0] && g_TouchX[id] <= g_FireZone[2] && g_TouchY[id] >= g_FireZone[1] && g_TouchY[id] <= g_FireZone[3]) g_FireTapAt = NowMs(); }
+            if (action == 2 && InFireZone(g_TouchX[id], g_TouchY[id])) g_FireTapAt = NowMs(); }
         static int dl = 0;
         if (g_DS != 0 && action != 3 && dl < 120) { ++dl; LOGI("dive touch action=%d id=%d at (%.2f,%.2f)", action, id, W0 > 0 ? (float)x / W0 : 0.f, H0 > 0 ? (float)y / H0 : 0.f); }
     }
