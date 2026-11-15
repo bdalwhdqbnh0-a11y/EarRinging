@@ -219,7 +219,8 @@ static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZone(g_TouchX[i], g_TouchY[i])) return true; return false; }
 static int   g_StripRoot = 1;
-static int   g_CamAnim = 1, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
+static float g_YawLimit = 1.2f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
+static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -316,6 +317,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveMaxMs")) g_DiveMaxMs = atoi(v);
         else if (!strcasecmp(k, "FireGapMs")) g_FireGapMs = atoi(v);
         else if (!strcasecmp(k, "AirSwitchMax")) g_AirSwitchMax = atoi(v);
+        else if (!strcasecmp(k, "AimYawLimit")) g_YawLimit = fminf(3.1f, fmaxf(0.1f, (float)atof(v)));
     }
     fclose(f);
 }
@@ -1101,7 +1103,7 @@ static void TouchEvent_hook(int action, int id, int x, int y)
             if (g_DS != 0 && action == 3 && g_TouchX[id] > 0.3f && !InFireZone(g_TouchX[id], g_TouchY[id]) && !InAimZone(g_TouchX[id], g_TouchY[id]))
             {
                 float ddx = g_TouchX[id] - g_LastTX[id], ddy = g_TouchY[id] - g_LastTY[id];
-                if (fabsf(ddx) < 0.2f && fabsf(ddy) < 0.2f) { { float dy_ = -ddx * g_SwipeSens; if (dy_ > 0.07f) dy_ = 0.07f; if (dy_ < -0.07f) dy_ = -0.07f; g_AdjYaw += dy_; } g_AdjPitch -= ddy * g_SwipeSens * 0.6f; if (g_AdjPitch > 1.0f) g_AdjPitch = 1.0f; if (g_AdjPitch < -1.0f) g_AdjPitch = -1.0f; g_SwipeAt = NowMs(); }
+                if (fabsf(ddx) < 0.2f && fabsf(ddy) < 0.2f) { { float dy_ = -ddx * g_SwipeSens; if (dy_ > 0.07f) dy_ = 0.07f; if (dy_ < -0.07f) dy_ = -0.07f; g_AdjYaw += dy_; if (g_AdjYaw > g_YawLimit) g_AdjYaw = g_YawLimit; if (g_AdjYaw < -g_YawLimit) g_AdjYaw = -g_YawLimit; } g_AdjPitch -= ddy * g_SwipeSens * 0.6f; if (g_AdjPitch > 1.0f) g_AdjPitch = 1.0f; if (g_AdjPitch < -1.0f) g_AdjPitch = -1.0f; g_SwipeAt = NowMs(); }
             }
             g_LastTX[id] = g_TouchX[id]; g_LastTY[id] = g_TouchY[id]; }
         static int dl = 0;
