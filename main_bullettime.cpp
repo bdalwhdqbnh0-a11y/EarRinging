@@ -212,10 +212,12 @@ static int   g_DiveMaxMs = 14000;
 static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f; static long long g_JumpLeadMs = 220;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireBtn[2] = { 0.13f, 0.62f }, g_AimBtn[2] = { 0.88f, 0.30f };   // dive buttons: fire on the radar side, aim on the weapon side (screen fractions)
+static inline bool InAimZone(float x, float y) { return fabsf(x - g_AimBtn[0]) <= 0.09f && fabsf(y - g_AimBtn[1]) <= 0.17f; }
 static inline bool InFireZone(float x, float y) { return fabsf(x - g_FireBtn[0]) <= 0.09f && fabsf(y - g_FireBtn[1]) <= 0.17f; }
 static float g_FireZone[4] = { 0.58f, 0.55f, 0.97f, 0.80f };   // the fire button moves a little between weapons: taps seen at x 0.78-0.88, y 0.71-0.78 (jump is at y >= 0.82)
 static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (fractions of the screen)
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
+static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZone(g_TouchX[i], g_TouchY[i])) return true; return false; }
 static int   g_StripRoot = 1;
 static int   g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
@@ -697,8 +699,9 @@ static void* PickTarget(void* ped, const float* org, const float* dir, float* ou
     uint8_t* pool = (uint8_t*)*g_PedPoolSym;
     uint8_t* objs = *(uint8_t**)pool; uint8_t* flags = *(uint8_t**)(pool + 8); int n = *(int*)(pool + 0x10);
     if (!objs || !flags || n <= 0 || n > 1000) return nullptr;
-    float cosCone = cosf(g_AimCone * 3.14159265f / 180.f);
-    void* best = nullptr; float bd = g_AimRange * g_AimRange;
+    bool boost = AimHeld();                                    // holding the aim button = full 360 degrees, longer range
+    float cosCone = cosf((boost ? 180.f : g_AimCone) * 3.14159265f / 180.f);
+    void* best = nullptr; float rng = boost ? fmaxf(g_AimRange, 60.f) : g_AimRange; float bd = rng * rng;
     for (int i = 0; i < n; ++i)
     {
         if (flags[i] & 0x80) continue;
@@ -935,6 +938,22 @@ static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Enabled) Tick(); }
 
 // double tap in the zone starts / stops bullet time
 static long long g_LastTap = 0;
+static bool (*g_CalcScr)(const float*, float*, float*, float*, bool, bool) = nullptr;
+static void (*g_DrawRect)(const float*, const uint8_t*) = nullptr;
+static void DrawBar(float x0, float y0, float x1, float y1, const uint8_t* col) { float r[4] = { x0, y1, x1, y0 }; g_DrawRect(r, col); }   // CRect = left, bottom, right, top
+static void DrawCrosshair()
+{
+    if (!g_Tgt || !g_IsAlive || !g_IsAlive(g_Tgt) || !g_CalcScr || !g_DrawRect || !OS_H) return;
+    float* tp = PedPos(g_Tgt); float in[3] = { tp[0], tp[1], tp[2] + 0.3f }, out[3], w = 0, h = 0;
+    if (!g_CalcScr(in, out, &w, &h, true, true)) return;
+    float k = (float)OS_H() / 1080.f, x = out[0], y = out[1], t = 2.5f * k, a = 14.f * k, bgap = 34.f * k;
+    static const uint8_t red[4] = { 255, 40, 40, 235 }, yel[4] = { 255, 220, 0, 255 };
+    const uint8_t* c = AimHeld() ? yel : red;
+    DrawBar(x - bgap, y - t, x - a, y + t, c); DrawBar(x + a, y - t, x + bgap, y + t, c);       // four ticks around the target
+    DrawBar(x - t, y - bgap, x + t, y - a, c);  DrawBar(x - t, y + a, x + t, y + bgap, c);
+    DrawBar(x - t, y - t, x + t, y + t, c);                                                      // centre dot
+    static int lg = 0; if (lg < 3) { ++lg; LOGI("hud: crosshair at (%.0f,%.0f)", x, y); }
+}
 typedef void (*DrawAll_t)(bool); static DrawAll_t DrawAll_orig = nullptr;
 static void** g_Widgets = nullptr; static void *g_VtAttack = nullptr, *g_VtTarget = nullptr;
 static void DrawAll_hook(bool b)
@@ -954,6 +973,7 @@ static void DrawAll_hook(bool b)
             } } else g_Widgets[i] = nullptr; }
         static int lg = 0; if (lg < 3) { ++lg; LOGI("hud: dive draw keeps %d widgets", kept); }
         DrawAll_orig(b);
+        if (!b) DrawCrosshair();
         memcpy(g_Widgets, saved, sizeof(saved));
         for (int i = 0; i < 190; ++i) if (saved[i]) { void* vt = *(void**)saved[i]; if (vt == g_VtAttack || vt == g_VtTarget) { *((uint8_t*)saved[i] + 0x58) = en[i]; memcpy((uint8_t*)saved[i] + 0x2c, rc0[i], 16); } }
         return;
@@ -1046,6 +1066,9 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     uintptr_t va = ResolveExact("_ZTV19CWidgetButtonAttack"), vt = ResolveExact("_ZTV22CWidgetButtonTargeting");
     if (va) g_VtAttack = (void*)(va + 16);
     if (vt) g_VtTarget = (void*)(vt + 16);
+    g_CalcScr = (bool (*)(const float*, float*, float*, float*, bool, bool))ResolveExact("_ZN7CSprite15CalcScreenCoorsERK5RwV3dPS0_PfS4_bb");
+    g_DrawRect = (void (*)(const float*, const uint8_t*))ResolveExact("_ZN9CSprite2d8DrawRectERK5CRectRK5CRGBA");
+    LOGI("hud symbols: calc=%p rect=%p", (void*)g_CalcScr, (void*)g_DrawRect);
     LOGI("hud symbols: widgets=%p attack=%p target=%p", (void*)g_Widgets, g_VtAttack, g_VtTarget);
     if (g_Widgets && g_VtAttack) Install("_ZN15CTouchInterface7DrawAllEb", (void*)DrawAll_hook, &DrawAll_orig);
 }
