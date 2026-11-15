@@ -227,6 +227,7 @@ static float g_CamDist = 2.3f, g_CamHeight = 0.95f, g_CamSide = 0.95f, g_CamLook
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
 static float g_SwTime = 0.f; static long long g_SwUntil = 0;
+static int   g_SwCount = 0, g_AirSwitchMax = 1, g_CamPendDir = -1; static long long g_CamPendAt = 0;   // in-air animation switches this dive / allowed per dive / debounce
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
 
 static void LoadConfig()
@@ -314,6 +315,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveGravity")) g_Grav = (float)atof(v);
         else if (!strcasecmp(k, "DiveMaxMs")) g_DiveMaxMs = atoi(v);
         else if (!strcasecmp(k, "FireGapMs")) g_FireGapMs = atoi(v);
+        else if (!strcasecmp(k, "AirSwitchMax")) g_AirSwitchMax = atoi(v);
     }
     fclose(f);
 }
@@ -700,7 +702,7 @@ static void StartDive(void* ped)
     g_DPos[0] = PedPos(ped)[0]; g_DPos[1] = PedPos(ped)[1]; g_DPos[2] = PedPos(ped)[2];
     g_DTrav = 0.f; g_DVz = g_DiveUp; g_DLastG = g_GameMs ? *g_GameMs : 0;
     { float gz0 = g_GroundZ ? g_GroundZ(PedPos(ped)[0], PedPos(ped)[1]) : PedPos(ped)[2] - 1.f; g_DOff = PedPos(ped)[2] - gz0; if (g_DOff < 0.6f || g_DOff > 1.6f) g_DOff = 1.f; }
-    g_DS = DS_FLY; g_DStart = NowMs(); g_DLand = 0; g_NextFire = 0; g_DShots = 0;
+    g_DS = DS_FLY; g_DStart = NowMs(); g_DLand = 0; g_NextFire = 0; g_DShots = 0; g_SwCount = 0; g_CamPendDir = -1; g_PendDir = -1; g_SwUntil = 0;
     PlayOn(3, g_Active ? g_DiveBt : g_DiveS, g_DiveVol);
     CamStart(ped);
     LOGI("dive START dir=%d var=%d slot=%u stick=(%d,%d) anim=%s assoc=%p v=(%.3f,%.3f,%.3f) pos=(%.1f,%.1f,%.1f)", dir, var, slot, lr, ud, kDiveNames[g_DAnim], g_DAssoc,
@@ -879,8 +881,9 @@ static void DiveTick(void* ped, long long now)
     float steps = (gnow - g_DLastG) / 20.f; g_DLastG = gnow;
     if (g_Scale < 0.999f) steps *= fminf((g_DS == DS_FLY ? g_DiveCJ / g_AirStretch : g_DiveCJ) / g_Scale, 6.f);       // CJ's own clock runs faster than the slowed world (same factor as his animation)          // game time steps (1 step = 1/50 s, already slowed by the time scale)
     if (steps < 0.f || steps > 6.f) steps = 0.f;
-    if (g_DS == DS_FLY && g_CamAnim && el > 150)
+    if (g_DS == DS_FLY && g_CamAnim && el > 150 && g_SwCount < g_AirSwitchMax)
     {   // the animation follows the camera: it depends on where CJ is flying relative to where the camera / aim looks
+        // (at most g_AirSwitchMax switches per dive and only when the new direction held for 200 ms: auto-aim target changes used to flip it back and forth = the clip replayed)
         float ax = g_DAim[0], ay = g_DAim[1], al = sqrtf(ax * ax + ay * ay), hl2 = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]);
         if (al > 0.2f && hl2 > 1e-5f)
         {
@@ -892,9 +895,14 @@ static void DiveTick(void* ped, long long now)
             if (dc > 52.f)                                                      // 45 degrees + 7 of hysteresis
             {
                 int nd = fabsf(a) <= 45.f ? 0 : fabsf(a) >= 135.f ? 1 : (a < 0 ? 2 : 3);
+                if (nd == 1) nd = g_CurDir;                                     // never switch to the backward clip in the air (he falls on his back; BackTurn only works at take-off)
                 int var = g_DAnim % 3; void* h2 = g_DiveHier[nd * 3 + var] ? g_DiveHier[nd * 3 + var] : g_DiveHier[nd * 3]; void* cl = *(void**)((uint8_t*)ped + 0x20);
-                if (nd != g_CurDir && (g_DAnim / 3) != nd && h2 && cl && g_Blend && now - g_SwitchAt > 250)
+                bool want = (nd != g_CurDir && (g_DAnim / 3) != nd && h2 && cl && g_Blend);
+                if (!want) g_CamPendDir = -1;
+                else if (g_CamPendDir != nd) { g_CamPendDir = nd; g_CamPendAt = now; }
+                else if (now - g_CamPendAt > 200 && now - g_SwitchAt > 250)
                 {
+                    g_CamPendDir = -1; ++g_SwCount;
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                     void* na = g_Blend(cl, h2, g_DiveFlags, 3.0f);            // slow cross-fade (0.33 s), the new clip continues at the same time
                     if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = fminf(fmaxf(oldCt, 0.55f), tt - 0.1f); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 400; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
@@ -903,9 +911,10 @@ static void DiveTick(void* ped, long long now)
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
                 }
             }
+            else g_CamPendDir = -1;
         }
     }
-    if (g_DS == DS_FLY && g_AirSteer && g_GetPad && g_WalkLR && g_WalkUD && el > 150)
+    if (g_DS == DS_FLY && g_AirSteer && g_GetPad && g_WalkLR && g_WalkUD && el > 150 && g_SwCount < g_AirSwitchMax)
     {   // steering in the air: push the stick another way and CJ changes his dive (animation + direction)
         void* pd = g_GetPad(0); int lr = pd ? g_WalkLR(pd) : 0, ud = pd ? g_WalkUD(pd) : 0;
         if (abs(lr) >= 45 || abs(ud) >= 45)
@@ -927,8 +936,8 @@ static void DiveTick(void* ped, long long now)
                     {
                         float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                         void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
-                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); *(float*)((uint8_t*)na + 0x38) = fminf(oldCt, tt - 0.1f); g_DAssoc = na; }
-                        g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1;
+                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = fminf(fmaxf(oldCt, 0.55f), tt - 0.1f); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 400; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
+                        g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1; ++g_SwCount;
                         float sp = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); g_DHv[0] = hx * sp; g_DHv[1] = hy * sp;
                         g_DFace[0] = fx; g_DFace[1] = fy; if (!g_Tgt && !(g_SwipeAt && now - g_SwipeAt < 2500)) { g_DAim[0] = fx; g_DAim[1] = fy; g_DAim[2] = 0.f; }
                         float nh = atan2f(-fx, fy); uint8_t* pb4 = (uint8_t*)ped; *(float*)(pb4 + 0x6c4) = nh; *(float*)(pb4 + 0x6c8) = nh; *(float*)(pb4 + 0x918) = nh;
