@@ -209,7 +209,7 @@ static float g_DiveZone[4] = { 0, 0, 0, 0 };              // optional touch zone
 static int   g_DiveFlags = 0, g_FireGapMs = 220;
 static float g_DiveAnimBlend = 25.f, g_LandSlide = 0.35f, g_DiveVol = 0.6f;
 static int   g_DiveMaxMs = 14000;
-static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f, g_SwipeSens = 3.2f; static long long g_JumpLeadMs = 220;
+static float g_LandWorld = 1.0f, g_AirStretch = 2.8f, g_AirDist = 10.0f, g_SwipeSens = 4.5f; static long long g_JumpLeadMs = 220;
 static float g_DiveWorld = 0.15f, g_DiveCJ = 0.5f, g_DiveMaxDist = 1.5f, g_DTrav = 0.f;   // world speed / CJ speed during a dive, max horizontal travel (m)
 static float g_FireBtn[2] = { 0.13f, 0.62f }, g_AimBtn[2] = { 0.88f, 0.30f };   // dive buttons: fire on the radar side, aim on the weapon side (screen fractions)
 static inline bool InAimZone(float x, float y) { return fabsf(x - g_AimBtn[0]) <= 0.09f && fabsf(y - g_AimBtn[1]) <= 0.17f; }
@@ -887,7 +887,7 @@ static void DiveTick(void* ped, long long now)
             float a = atan2f(r, f) * 57.29578f;                                 // 0 fwd, 90 right, +-180 back, -90 left
             static const float ctr[4] = { 0.f, 180.f, -90.f, 90.f };            // fwd, bkw, left, right
             float dc = fabsf(a - ctr[g_CurDir]); if (g_CurDir == 1) dc = 180.f - fabsf(a); else if (dc > 180.f) dc = 360.f - dc;
-            if (dc > 57.f)                                                      // 45 degrees + 12 of hysteresis
+            if (dc > 52.f)                                                      // 45 degrees + 7 of hysteresis
             {
                 int nd = fabsf(a) <= 45.f ? 0 : fabsf(a) >= 135.f ? 1 : (a < 0 ? 2 : 3);
                 int var = g_DAnim % 3; void* h2 = g_DiveHier[nd * 3 + var] ? g_DiveHier[nd * 3 + var] : g_DiveHier[nd * 3]; void* cl = *(void**)((uint8_t*)ped + 0x20);
