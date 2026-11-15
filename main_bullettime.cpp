@@ -634,11 +634,13 @@ static void CamStop()
     LOGI("camera: restored");
 }
 
+static int g_StkLR = 0, g_StkUD = 0; static long long g_StkAt = 0;
 static void StartDive(void* ped)
 {
     if (!g_DiveBlock) { LOGE("dive: animations not loaded"); return; }
     void* pad = g_GetPad ? g_GetPad(0) : nullptr;
     int lr = (pad && g_WalkLR) ? g_WalkLR(pad) : 0, ud = (pad && g_WalkUD) ? g_WalkUD(pad) : 0;
+    if (NowMs() - g_StkAt < 700 && (g_StkLR * g_StkLR + g_StkUD * g_StkUD) > (lr * lr + ud * ud)) { lr = g_StkLR; ud = g_StkUD; }   // the strongest stick push just before the jump (thumb may have eased off)
     float* m = PedMat(ped);
     float fwd[2] = { 0, 1 }, rgt[2] = { 1, 0 };
     if (m) { fwd[0] = m[4]; fwd[1] = m[5]; rgt[0] = m[0]; rgt[1] = m[1]; }   // matrix right = +0x00, forward = +0x10
@@ -659,7 +661,7 @@ static void StartDive(void* ped)
         }
     }
     int dir = 0;                                        // 0 fwd, 1 bkw, 2 left, 3 right
-    if (abs(ud) < 30 && abs(lr) < 30) dir = 0;                         // stick centred: dive forward
+    if (abs(ud) < 22 && abs(lr) < 22) dir = 0;                         // stick centred: dive forward
     else if (abs(ud) >= abs(lr)) dir = ud > 0 ? 1 : 0;                   // log: stick up = negative
     else dir = lr > 0 ? 3 : 2;
     float hv[2] = { fwd[0], fwd[1] };
@@ -736,7 +738,7 @@ static void AirShoot(void* ped, long long nowReal)
         g_DAim[0] = cosf(a0) * cp; g_DAim[1] = sinf(a0) * cp; g_DAim[2] = sinf(g_AdjPitch); g_Tgt = nullptr;
         float want = atan2f(-g_DAim[0], g_DAim[1]); float* rc = (float*)(pb + 0x6c4); float* ra = (float*)(pb + 0x6c8);
         float diff = want - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
-        float nh = *rc + diff * 0.3f; *rc = nh; *ra = nh;
+        float nh = *rc + diff * 0.9f; *rc = nh; *ra = want; *(float*)(pb + 0x918) = want;   // the game pulls the heading back every frame: write current, target and look angle
         float* m = PedMat(ped); if (m) { m[4] = -sinf(nh); m[5] = cosf(nh); m[0] = cosf(nh); m[1] = sinf(nh); }
     }
     if (g_AutoAim && !manual)
@@ -756,7 +758,7 @@ static void AirShoot(void* ped, long long nowReal)
                 float want = atan2f(-dx, dy);
                 float* rc = (float*)(pb + 0x6c4); float* ra = (float*)(pb + 0x6c8);
                 float diff = want - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
-                float nh = *rc + diff * 0.25f; *rc = nh; *ra = nh;
+                float nh = *rc + diff * 0.7f; *rc = nh; *ra = want; *(float*)(pb + 0x918) = want;
                 float* m = PedMat(ped); if (m) { m[4] = -sinf(nh); m[5] = cosf(nh); m[0] = cosf(nh); m[1] = sinf(nh); }
             }
         }
@@ -801,6 +803,11 @@ static void DiveTick(void* ped, long long now)
         bool req = g_DiveTouch.exchange(0) != 0;
         if (g_JumpDown && g_GetPad) { void* pad = g_GetPad(0); if (pad && g_JumpDown(pad)) req = true; }
         static long long leadAt = 0;
+        if (g_GetPad && g_WalkLR && g_WalkUD)
+        {   // remember the strongest stick push of the last ~0.45 s
+            void* pd = g_GetPad(0);
+            if (pd) { int l2 = g_WalkLR(pd), u2 = g_WalkUD(pd); if (l2 * l2 + u2 * u2 >= g_StkLR * g_StkLR + g_StkUD * g_StkUD || now - g_StkAt > 450) { g_StkLR = l2; g_StkUD = u2; g_StkAt = now; } }
+        }
         if (req && !leadAt && (g_Active || !g_DiveNeedBT)) leadAt = now + (g_JumpLeadMs > 0 ? g_JumpLeadMs : 1);   // let the game's own jump take-off play first
         if (leadAt)
         {
