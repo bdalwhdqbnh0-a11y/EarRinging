@@ -219,7 +219,7 @@ static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZone(g_TouchX[i], g_TouchY[i])) return true; return false; }
 static int   g_StripRoot = 1;
-static int   g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
+static int   g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -294,6 +294,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "AimButtonPos")) sscanf(v, "%f,%f", &g_AimBtn[0], &g_AimBtn[1]);
         else if (!strcasecmp(k, "CameraFollowBack")) g_CamBack = atoi(v);
         else if (!strcasecmp(k, "StickRelativeToCamera")) g_CamAxis = atoi(v);
+        else if (!strcasecmp(k, "BackwardTurnsRound")) g_BackTurn = atoi(v);
         else if (!strcasecmp(k, "InfiniteBar")) g_InfBar = atoi(v);
         else if (!strcasecmp(k, "HideHudInDive")) g_HideHud = atoi(v);
         else if (!strcasecmp(k, "StripRootMotion")) g_StripRoot = atoi(v);
@@ -667,6 +668,13 @@ static void StartDive(void* ped)
     if (abs(ud) < 22 && abs(lr) < 22) dir = 0;                         // stick centred: dive forward
     else if (abs(ud) >= abs(lr)) dir = ud > 0 ? 1 : 0;                   // log: stick up = negative
     else dir = lr > 0 ? 3 : 2;
+    if (dir == 1 && g_BackTurn)
+    {   // "backward": CJ turns round and dives away from the camera (seen from behind), instead of falling on his back towards it
+        dir = 0; fwd[0] = -fwd[0]; fwd[1] = -fwd[1]; rgt[0] = -rgt[0]; rgt[1] = -rgt[1];
+        float nh = atan2f(-fwd[0], fwd[1]); uint8_t* pb3 = (uint8_t*)ped; *(float*)(pb3 + 0x6c4) = nh; *(float*)(pb3 + 0x6c8) = nh; *(float*)(pb3 + 0x918) = nh;
+        if (m) { m[4] = fwd[0]; m[5] = fwd[1]; m[0] = rgt[0]; m[1] = rgt[1]; }
+        LOGI("dive: backward = turn round and dive away from the camera");
+    }
     float hv[2] = { fwd[0], fwd[1] };
     if (dir == 1) { hv[0] = -fwd[0]; hv[1] = -fwd[1]; }
     else if (dir == 2) { hv[0] = -rgt[0]; hv[1] = -rgt[1]; }
