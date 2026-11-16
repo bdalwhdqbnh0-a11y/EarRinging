@@ -219,6 +219,9 @@ static long long g_FireTapAt = 0;   // touch area of the on-screen fire button (
 static bool  g_TouchDown[8] = {0}; static float g_TouchX[8] = {0}, g_TouchY[8] = {0};
 static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZone(g_TouchX[i], g_TouchY[i])) return true; return false; }
 static int   g_StripRoot = 1;
+// Bone twist: after the game has updated CJ's skeleton, the upper body (chest, arms, neck, head) is rotated about the vertical axis towards the aim, so the
+// legs keep the dive direction. Torso up to TorsoMax rad, the head turns up to HeadMax more. Rate = easing per frame.
+static int   g_BoneTwist = 1; static float g_TorsoMax = 0.80f, g_HeadMax = 0.60f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
 static int   g_TorsoTwist = 1; static float g_TwistMax = 1.35f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 1.2f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
 static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
@@ -318,6 +321,10 @@ static void LoadConfig()
         else if (!strcasecmp(k, "DiveMaxMs")) g_DiveMaxMs = atoi(v);
         else if (!strcasecmp(k, "FireGapMs")) g_FireGapMs = atoi(v);
         else if (!strcasecmp(k, "AirSwitchMax")) g_AirSwitchMax = atoi(v);
+        else if (!strcasecmp(k, "BoneTwist")) g_BoneTwist = atoi(v);
+        else if (!strcasecmp(k, "TorsoDeg")) g_TorsoMax = fminf(90.f, fmaxf(0.f, (float)atof(v))) * 0.0174533f;
+        else if (!strcasecmp(k, "HeadDeg")) g_HeadMax = fminf(90.f, fmaxf(0.f, (float)atof(v))) * 0.0174533f;
+        else if (!strcasecmp(k, "TwistRate")) g_TwRate = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
         else if (!strcasecmp(k, "TorsoTwist")) g_TorsoTwist = atoi(v);
         else if (!strcasecmp(k, "TwistMax")) g_TwistMax = fminf(3.1f, fmaxf(0.3f, (float)atof(v)));
         else if (!strcasecmp(k, "AimYawLimit")) g_YawLimit = fminf(3.1f, fmaxf(0.1f, (float)atof(v)));
@@ -707,7 +714,7 @@ static void StartDive(void* ped)
     g_DPos[0] = PedPos(ped)[0]; g_DPos[1] = PedPos(ped)[1]; g_DPos[2] = PedPos(ped)[2];
     g_DTrav = 0.f; g_DVz = g_DiveUp; g_DLastG = g_GameMs ? *g_GameMs : 0;
     { float gz0 = g_GroundZ ? g_GroundZ(PedPos(ped)[0], PedPos(ped)[1]) : PedPos(ped)[2] - 1.f; g_DOff = PedPos(ped)[2] - gz0; if (g_DOff < 0.6f || g_DOff > 1.6f) g_DOff = 1.f; }
-    g_DS = DS_FLY; g_DStart = NowMs(); g_DLand = 0; g_NextFire = 0; g_DShots = 0; g_SwCount = 0; g_CamPendDir = -1; g_PendDir = -1; g_SwUntil = 0;
+    g_DS = DS_FLY; g_DStart = NowMs(); g_DLand = 0; g_NextFire = 0; g_DShots = 0; g_SwCount = 0; g_CamPendDir = -1; g_PendDir = -1; g_SwUntil = 0; g_TwWant = 0.f; g_TwCur = 0.f;
     PlayOn(3, g_Active ? g_DiveBt : g_DiveS, g_DiveVol);
     CamStart(ped);
     LOGI("dive START dir=%d var=%d slot=%u stick=(%d,%d) anim=%s assoc=%p v=(%.3f,%.3f,%.3f) pos=(%.1f,%.1f,%.1f)", dir, var, slot, lr, ud, kDiveNames[g_DAnim], g_DAssoc,
@@ -798,6 +805,11 @@ static void AirShoot(void* ped, long long nowReal)
             }
         }
         else g_Tgt = nullptr;
+    }
+    {   // how far the aim is turned away from where CJ's body faces (forward = (-sin h, cos h), so its world yaw is h + 90 deg); the bone twist hook follows this
+        float d = atan2f(g_DAim[1], g_DAim[0]) - (*(float*)(pb + 0x6c4) + 1.5707963f);
+        while (d > 3.14159265f) d -= 6.2831853f; while (d < -3.14159265f) d += 6.2831853f;
+        g_TwWant = d;
     }
     tgt[0] = org[0] + g_DAim[0] * 30.f; tgt[1] = org[1] + g_DAim[1] * 30.f; tgt[2] = org[2] + g_DAim[2] * 30.f;
     if (g_AutoAim && g_Tgt) { float* pp = PedPos(g_Tgt); tgt[0] = pp[0]; tgt[1] = pp[1]; tgt[2] = pp[2] + 0.25f; }
@@ -1059,6 +1071,54 @@ static void Tick()
 }
 static void TimerUpdate_hook() { TimerUpdate_orig(); if (g_Enabled) Tick(); }
 
+// ---------------------------------------------------------------- bone twist (upper body follows the aim in the air)
+// CPed::ShoulderBoneRotation(RpClump*) is called by CPed::PreRenderAfterTest for CJ every frame, after CEntity::UpdateRpHAnim has filled the skeleton's
+// matrix array and before CPed::Render draws the skin and the weapon (the weapon is placed from the hand bone's matrix, so it follows the arm).
+// The array holds absolute 4x4 matrices (RwMatrix, 64 bytes: right, up, at, pos rows). Rotating a bone about the vertical axis through a pivot:
+// rotate its three axis rows and its position row around the pivot.
+typedef void* (*RpGetHier_t)(void*);  typedef int (*RpHIdx_t)(void*, int);  typedef uint8_t* (*RpHMat_t)(void*);
+static RpGetHier_t RpGetHier = nullptr; static RpHIdx_t RpHIdx = nullptr; static RpHMat_t RpHMat = nullptr;
+static void (*Shoulder_orig)(void*) = nullptr;
+
+static void TwistBone(uint8_t* m, float c, float s, const float* P)
+{
+    float* r = (float*)m;                                   // right(0..2) flags(3) up(4..6) pad(7) at(8..10) pad(11) pos(12..14)
+    for (int k = 0; k < 3; ++k) { float* v = r + k * 4; float x = v[0], y = v[1]; v[0] = c * x - s * y; v[1] = s * x + c * y; }
+    float* p = r + 12; float x = p[0] - P[0], y = p[1] - P[1]; p[0] = P[0] + c * x - s * y; p[1] = P[1] + s * x + c * y;
+}
+
+static void Shoulder_hook(void* clump)
+{
+    Shoulder_orig(clump);
+    if (!g_BoneTwist || !clump) return;
+    void* pl = g_FindPlayerPed ? g_FindPlayerPed(0) : nullptr;
+    if (!pl || clump != *(void**)((uint8_t*)pl + 0x20)) return;           // only the player
+    float want = (g_DS == DS_FLY) ? g_TwWant : 0.f;                       // ease in while flying, ease back out afterwards
+    g_TwCur += (want - g_TwCur) * g_TwRate;
+    if (fabsf(g_TwCur) < 0.002f) return;
+    void* h = RpGetHier(clump); if (!h) return;
+    uint8_t* arr = RpHMat(h); if (!arr) return;
+    int isp = RpHIdx(h, 3), ink = RpHIdx(h, 5);                           // 3 = spine, 5 = neck
+    if (isp < 0 || ink < 0) return;
+    float lim = g_TorsoMax + g_HeadMax;
+    float t = fminf(fmaxf(g_TwCur, -lim), lim);
+    float a1 = fminf(fmaxf(t, -g_TorsoMax), g_TorsoMax), a2 = t - a1;     // chest first, the rest is added by the head
+    static const int upper[] = { 4, 5, 6, 7, 8, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 36, 201, 301, 302 };   // upper torso, neck, head, both arms, belly, breasts
+    static const int head[]  = { 5, 6, 7, 8 };
+    float P1[3]; memcpy(P1, (float*)(arr + (size_t)isp * 64 + 48), sizeof(P1));
+    if (fabsf(a1) > 0.001f)
+    {
+        float c = cosf(a1), s = sinf(a1);
+        for (int id : upper) { int i = RpHIdx(h, id); if (i >= 0) TwistBone(arr + (size_t)i * 64, c, s, P1); }
+    }
+    if (fabsf(a2) > 0.001f)
+    {
+        float P2[3]; memcpy(P2, (float*)(arr + (size_t)ink * 64 + 48), sizeof(P2));
+        float c = cosf(a2), s = sinf(a2);
+        for (int id : head) { int i = RpHIdx(h, id); if (i >= 0) TwistBone(arr + (size_t)i * 64, c, s, P2); }
+    }
+}
+
 // double tap in the zone starts / stops bullet time
 static long long g_LastTap = 0;
 static bool (*g_CalcScr)(const float*, float*, float*, float*, bool, bool) = nullptr;
@@ -1193,6 +1253,11 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
 
     Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
     Install("_Z14AND_TouchEventiiii", (void*)TouchEvent_hook, &TouchEvent_orig);
+    *(void**)&RpGetHier = (void*)ResolveExact("_Z29GetAnimHierarchyFromSkinClumpP7RpClump");
+    *(void**)&RpHIdx    = (void*)ResolveExact("_Z17RpHAnimIDGetIndexP16RpHAnimHierarchyi");
+    *(void**)&RpHMat    = (void*)ResolveExact("_Z30RpHAnimHierarchyGetMatrixArrayP16RpHAnimHierarchy");
+    if (g_BoneTwist && RpGetHier && RpHIdx && RpHMat) Install("_ZN4CPed20ShoulderBoneRotationEP7RpClump", (void*)Shoulder_hook, &Shoulder_orig);
+    else LOGI("bone twist: disabled (config off or symbols missing: %p %p %p)", (void*)RpGetHier, (void*)RpHIdx, (void*)RpHMat);
     g_Widgets = (void**)ResolveExact("_ZN15CTouchInterface10m_pWidgetsE");
     uintptr_t va = ResolveExact("_ZTV19CWidgetButtonAttack"), vt = ResolveExact("_ZTV22CWidgetButtonTargeting");
     if (va) g_VtAttack = (void*)(va + 16);
