@@ -222,6 +222,7 @@ static int   g_StripRoot = 1;
 // Bone twist: after the game has updated CJ's skeleton, the upper body (chest, arms, neck, head) is rotated about the vertical axis towards the aim, so the
 // legs keep the dive direction. Torso up to TorsoMax rad, the head turns up to HeadMax more. Rate = easing per frame.
 static int   g_BoneTwist = 1; static float g_TorsoMax = 1.25f, g_HeadMax = 0.45f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
+static float g_LegFollow = 0.5f;
 static int   g_TorsoTwist = 1; static float g_TwistMax = 1.35f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 2.4f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
 static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
@@ -325,6 +326,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "TorsoDeg")) g_TorsoMax = fminf(90.f, fmaxf(0.f, (float)atof(v))) * 0.0174533f;
         else if (!strcasecmp(k, "HeadDeg")) g_HeadMax = fminf(90.f, fmaxf(0.f, (float)atof(v))) * 0.0174533f;
         else if (!strcasecmp(k, "TwistRate")) g_TwRate = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
+        else if (!strcasecmp(k, "LegFollow")) g_LegFollow = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "TorsoTwist")) g_TorsoTwist = atoi(v);
         else if (!strcasecmp(k, "TwistMax")) g_TwistMax = fminf(3.1f, fmaxf(0.3f, (float)atof(v)));
         else if (!strcasecmp(k, "AimYawLimit")) g_YawLimit = fminf(3.1f, fmaxf(0.1f, (float)atof(v)));
@@ -765,7 +767,7 @@ static void TurnBody(void* ped, float want, float blend)
     {
         float face = atan2f(-g_DFace[0], g_DFace[1]);
         float d = want - face; while (d > 3.14159265f) d -= 6.2831853f; while (d < -3.14159265f) d += 6.2831853f;
-        goal = fabsf(d) <= g_TwistMax ? face : want - (d > 0.f ? g_TwistMax : -g_TwistMax);
+        goal = face + d * g_LegFollow; if (fabsf(d) * (1.f - g_LegFollow) > g_TwistMax) goal = want - (d > 0.f ? g_TwistMax : -g_TwistMax);   // legs / hips follow part of the turn, the upper body twists the rest
     }
     float diff = goal - *rc; while (diff > 3.14159265f) diff -= 6.2831853f; while (diff < -3.14159265f) diff += 6.2831853f;
     float nh = *rc + diff * blend; *rc = nh; *ra = goal; *(float*)(pb + 0x918) = want;   // the game pulls the heading back every frame: write current, target and look angle
