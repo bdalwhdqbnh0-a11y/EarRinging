@@ -232,6 +232,7 @@ static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated 
 static float g_CamDist = 2.3f, g_CamHeight = 0.95f, g_CamSide = 0.95f, g_CamLook = 9.0f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
+static int g_FlyPose = 1; static float g_FlyPoseRate = 1.1f;
 static float g_SwTime = 0.f; static long long g_SwUntil = 0;
 static int   g_SwCount = 0, g_AirSwitchMax = 2, g_CamPendDir = -1; static long long g_CamPendAt = 0;   // in-air animation switches this dive / allowed per dive / debounce
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
@@ -328,6 +329,8 @@ static void LoadConfig()
         else if (!strcasecmp(k, "TwistRate")) g_TwRate = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
         else if (!strcasecmp(k, "TwistLegs")) g_TwLegs = fminf(0.8f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "TwistBelly")) g_TwBelly = fminf(0.8f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "FlyPose")) g_FlyPose = atoi(v);
+        else if (!strcasecmp(k, "FlyPoseRate")) g_FlyPoseRate = fminf(4.f, fmaxf(0.3f, (float)atof(v)));
         else if (!strcasecmp(k, "LegFollow")) g_LegFollow = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "TorsoTwist")) g_TorsoTwist = atoi(v);
         else if (!strcasecmp(k, "TwistMax")) g_TwistMax = fminf(3.1f, fmaxf(0.3f, (float)atof(v)));
@@ -881,6 +884,13 @@ static void DiveTick(void* ped, long long now)
     void* mine = FindAssocByHier(ped, g_DiveHier[g_DAnim] ? g_DiveHier[g_DAnim] : g_DiveHier[(g_DAnim / 3) * 3]);
     float mw = 0.f;
     if (mine) { mw = *(float*)((uint8_t*)mine + 0x30); g_DAssoc = mine; }
+    if (mine && g_DS == DS_FLY && g_FlyPose)
+    {   // the video: the clip crawled through its upright take-off (arms up) for seconds and only reached the stretched pose at touch-down. Reach the stretched pose
+        // (clip time ~1.0 s) quickly, then hold it for the rest of the flight, like the reference pictures
+        float* ctp = (float*)((uint8_t*)mine + 0x38); float tg = fminf(1.05f, (float)(now - g_DStart) / 1000.f * g_FlyPoseRate);
+        if (*ctp < tg) *ctp = tg;
+        if (*ctp > 1.12f) *ctp = 1.12f;
+    }
     if (mine && now < g_SwUntil)
     {   // keep the new clip from ever going back in time after a direction change (the engine restarts it at 0 = the dive replays)
         float* ctp = (float*)((uint8_t*)mine + 0x38);
