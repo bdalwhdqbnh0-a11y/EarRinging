@@ -579,7 +579,7 @@ static float PhaseT(int o, int n, float ct, float tt)
 {   // the log showed the unswitched clip only reaches ~0.8 s by touch-down: that stretched pose IS the last flight pose, so the new clip enters at it (not the take-off arm swing)
     (void)o; (void)ct;
     float gn = g_RootTab[n].tG, hi = gn > 0.2f ? gn - 0.05f : tt - 0.1f;
-    return fminf(0.8f, hi);
+    return fminf(1.05f, hi);   // the clips hold their stretched pose between ~0.9 and 1.2 s; 0.8 s is the arm swing into it (the "hands jumping" look)
 }
 enum { DS_NONE = 0, DS_FLY, DS_LAND };
 static int   g_DS = DS_NONE;
