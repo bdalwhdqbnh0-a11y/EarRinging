@@ -221,9 +221,9 @@ static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZ
 static int   g_StripRoot = 1;
 // Bone twist: after the game has updated CJ's skeleton, the upper body (chest, arms, neck, head) is rotated about the vertical axis towards the aim, so the
 // legs keep the dive direction. Torso up to TorsoMax rad, the head turns up to HeadMax more. Rate = easing per frame.
-static int   g_BoneTwist = 1; static float g_TorsoMax = 1.5f, g_HeadMax = 0.6f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
+static int   g_BoneTwist = 0; static float g_TorsoMax = 1.5f, g_HeadMax = 0.6f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
 static float g_LegFollow = 0.25f, g_TwLegs = 0.0f, g_TwBelly = 0.0f;   // body twist shares: hips+legs / belly (the chest gets the rest)
-static int   g_TorsoTwist = 1; static float g_TwistMax = 1.7f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
+static int   g_TorsoTwist = 0; static float g_TwistMax = 1.7f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 3.1f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
 static int   g_CamAnim = 1, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
@@ -576,11 +576,10 @@ static void LoadDiveAnims()
 // new clip after a direction change: same phase of the flight as the old one (old time / old plateau time * new plateau time), never past its own plateau, so it comes in
 // as the last flight pose of that direction and never replays the take-off or runs into the get-up while still in the air
 static float PhaseT(int o, int n, float ct, float tt)
-{
-    float go = g_RootTab[o].tG, gn = g_RootTab[n].tG;
-    float nt = (go > 0.2f && gn > 0.2f) ? ct * gn / go : ct;
-    float hi = gn > 0.2f ? gn - 0.05f : tt - 0.1f;
-    return fminf(fmaxf(nt, 0.6f), hi);   // never earlier than 0.6 s: before that the clip is the take-off wind-up (arms swing up, "jumping again")
+{   // the log showed the unswitched clip only reaches ~0.8 s by touch-down: that stretched pose IS the last flight pose, so the new clip enters at it (not the take-off arm swing)
+    (void)o; (void)ct;
+    float gn = g_RootTab[n].tG, hi = gn > 0.2f ? gn - 0.05f : tt - 0.1f;
+    return fminf(0.8f, hi);
 }
 enum { DS_NONE = 0, DS_FLY, DS_LAND };
 static int   g_DS = DS_NONE;
@@ -885,8 +884,9 @@ static void DiveTick(void* ped, long long now)
     if (mine && now < g_SwUntil)
     {   // keep the new clip from ever going back in time after a direction change (the engine restarts it at 0 = the dive replays)
         float* ctp = (float*)((uint8_t*)mine + 0x38);
-        if (*ctp < g_SwTime - 0.01f) { LOGI("dive: switch time fix %.2f -> %.2f", *ctp, g_SwTime); *ctp = g_SwTime; } else g_SwTime = *ctp;
-        static long long lw = 0; if (g_DiveLog && now - lw > 120) { lw = now; LOGI("dive: switch watch ct=%.2f w=%.2f d=%.1f spd=%.2f", *ctp, *(float*)((uint8_t*)mine + 0x30), *(float*)((uint8_t*)mine + 0x34), *(float*)((uint8_t*)mine + 0x3C)); }
+        if (g_DS == DS_FLY) { if (*ctp < g_SwTime - 0.01f || *ctp > g_SwTime + 0.04f) *ctp = fminf(fmaxf(*ctp, g_SwTime), g_SwTime + 0.04f); }   // hold the last flight pose until touch-down
+        else if (*ctp < g_SwTime - 0.01f) *ctp = g_SwTime;
+        static long long lw = 0; if (g_DiveLog && now - lw > 120 && now < g_SwUntil - 27000) { lw = now; LOGI("dive: switch watch ct=%.2f w=%.2f d=%.1f spd=%.2f", *ctp, *(float*)((uint8_t*)mine + 0x30), *(float*)((uint8_t*)mine + 0x34), *(float*)((uint8_t*)mine + 0x3C)); }
     }   // the engine restarted the new clip at 0: put it back in the flight phase
     if (mine)
     {   // hold the mod clip at full weight until its last 0.3 s (something fades it out half way through)
@@ -951,7 +951,7 @@ static void DiveTick(void* ped, long long now)
                     g_CamPendDir = -1; ++g_SwCount;
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                     void* na = g_Blend(cl, h2, g_DiveFlags, 3.0f);            // slow cross-fade (0.33 s), the new clip continues at the same time
-                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 1500; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
+                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
                     if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -3.0f;      // the old clip fades out over the same 0.33 s and is removed
                     g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
@@ -982,7 +982,7 @@ static void DiveTick(void* ped, long long now)
                     {
                         float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                         void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
-                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 1500; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
+                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
                         g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1; ++g_SwCount;
                         float sp = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); g_DHv[0] = hx * sp; g_DHv[1] = hy * sp;
                         g_DFace[0] = fx; g_DFace[1] = fy; if (!g_Tgt && !(g_SwipeAt && now - g_SwipeAt < 2500)) { g_DAim[0] = fx; g_DAim[1] = fy; g_DAim[2] = 0.f; }
