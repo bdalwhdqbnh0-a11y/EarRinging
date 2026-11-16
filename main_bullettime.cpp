@@ -222,7 +222,7 @@ static int   g_StripRoot = 1;
 // Bone twist: after the game has updated CJ's skeleton, the upper body (chest, arms, neck, head) is rotated about the vertical axis towards the aim, so the
 // legs keep the dive direction. Torso up to TorsoMax rad, the head turns up to HeadMax more. Rate = easing per frame.
 static int   g_BoneTwist = 1; static float g_TorsoMax = 1.5f, g_HeadMax = 0.6f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
-static float g_LegFollow = 0.4f;
+static float g_LegFollow = 0.25f, g_TwLegs = 0.15f, g_TwBelly = 0.45f;   // body twist shares: hips+legs / belly (the chest gets the rest)
 static int   g_TorsoTwist = 1; static float g_TwistMax = 1.7f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 3.1f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
 static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
@@ -326,6 +326,8 @@ static void LoadConfig()
         else if (!strcasecmp(k, "TorsoDeg")) g_TorsoMax = fminf(90.f, fmaxf(0.f, (float)atof(v))) * 0.0174533f;
         else if (!strcasecmp(k, "HeadDeg")) g_HeadMax = fminf(90.f, fmaxf(0.f, (float)atof(v))) * 0.0174533f;
         else if (!strcasecmp(k, "TwistRate")) g_TwRate = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
+        else if (!strcasecmp(k, "TwistLegs")) g_TwLegs = fminf(0.8f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "TwistBelly")) g_TwBelly = fminf(0.8f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "LegFollow")) g_LegFollow = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "TorsoTwist")) g_TorsoTwist = atoi(v);
         else if (!strcasecmp(k, "TwistMax")) g_TwistMax = fminf(3.1f, fmaxf(0.3f, (float)atof(v)));
@@ -1108,11 +1110,17 @@ static void Shoulder_hook(void* clump)
     float a1 = fminf(fmaxf(t, -g_TorsoMax), g_TorsoMax), a2 = t - a1;     // chest first, the rest is added by the head
     static const int upper[] = { 3, 4, 5, 6, 7, 8, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 36, 201, 301, 302 };   // upper torso, neck, head, both arms, belly, breasts
     static const int head[]  = { 5, 6, 7, 8 };
-    float P1[3]; memcpy(P1, (float*)(arr + (size_t)isp * 64 + 48), sizeof(P1));
     if (fabsf(a1) > 0.001f)
-    {
-        float c = cosf(a1), s = sinf(a1);
-        for (int id : upper) { int i = RpHIdx(h, id); if (i >= 0) TwistBone(arr + (size_t)i * 64, c, s, P1); }
+    {   // graded twist like a real spine: hips and legs take a little, the belly more, the chest / shoulders / arms the rest, so the pivot of the body moves with the aim
+        static const int legs[] = { 1, 41, 42, 43, 44, 51, 52, 53, 54 };                                                   // pelvis, both legs
+        static const int mid[]  = { 2, 3, 4, 5, 6, 7, 8, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 36, 201, 301, 302 };  // belly and everything above it
+        int ip = RpHIdx(h, 1); if (ip < 0) ip = RpHIdx(h, 2);
+        float P0[3]; memcpy(P0, (float*)(arr + (size_t)(ip >= 0 ? ip : isp) * 64 + 48), sizeof(P0));
+        float aL = a1 * g_TwLegs, aM = a1 * g_TwBelly, aU = a1 - aL - aM;
+        if (fabsf(aL) > 0.001f) { float c = cosf(aL), s = sinf(aL); for (int id : legs) { int i = RpHIdx(h, id); if (i >= 0) TwistBone(arr + (size_t)i * 64, c, s, P0); } }
+        if (fabsf(aM) > 0.001f) { float c = cosf(aM + aL), s = sinf(aM + aL); for (int id : mid) { int i = RpHIdx(h, id); if (i >= 0) TwistBone(arr + (size_t)i * 64, c, s, P0); } }
+        float P1[3]; memcpy(P1, (float*)(arr + (size_t)isp * 64 + 48), sizeof(P1));
+        if (fabsf(aU) > 0.001f) { float c = cosf(aU), s = sinf(aU); for (int id : upper) { int i = RpHIdx(h, id); if (i >= 0) TwistBone(arr + (size_t)i * 64, c, s, P1); } }
     }
     if (fabsf(a2) > 0.001f)
     {
