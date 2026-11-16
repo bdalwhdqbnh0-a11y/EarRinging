@@ -221,8 +221,8 @@ static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZ
 static int   g_StripRoot = 1;
 // Bone twist: after the game has updated CJ's skeleton, the upper body (chest, arms, neck, head) is rotated about the vertical axis towards the aim, so the
 // legs keep the dive direction. Torso up to TorsoMax rad, the head turns up to HeadMax more. Rate = easing per frame.
-static int   g_BoneTwist = 0; static float g_TorsoMax = 0.80f, g_HeadMax = 0.60f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
-static int   g_TorsoTwist = 0; static float g_TwistMax = 1.35f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
+static int   g_BoneTwist = 1; static float g_TorsoMax = 1.25f, g_HeadMax = 0.45f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
+static int   g_TorsoTwist = 1; static float g_TwistMax = 1.35f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 2.4f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
 static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
@@ -1100,10 +1100,11 @@ static void Shoulder_hook(void* clump)
     uint8_t* arr = RpHMat(h); if (!arr) return;
     int isp = RpHIdx(h, 3), ink = RpHIdx(h, 5);                           // 3 = spine, 5 = neck
     if (isp < 0 || ink < 0) return;
+    { static long long lg = 0; long long nw = NowMs(); if (nw - lg > 400 && g_DiveLog) { lg = nw; LOGI("bone twist: want=%.0f cur=%.0f deg (spine idx %d neck idx %d)", g_TwWant * 57.3f, g_TwCur * 57.3f, isp, ink); } }
     float lim = g_TorsoMax + g_HeadMax;
     float t = fminf(fmaxf(g_TwCur, -lim), lim);
     float a1 = fminf(fmaxf(t, -g_TorsoMax), g_TorsoMax), a2 = t - a1;     // chest first, the rest is added by the head
-    static const int upper[] = { 4, 5, 6, 7, 8, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 36, 201, 301, 302 };   // upper torso, neck, head, both arms, belly, breasts
+    static const int upper[] = { 3, 4, 5, 6, 7, 8, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 36, 201, 301, 302 };   // upper torso, neck, head, both arms, belly, breasts
     static const int head[]  = { 5, 6, 7, 8 };
     float P1[3]; memcpy(P1, (float*)(arr + (size_t)isp * 64 + 48), sizeof(P1));
     if (fabsf(a1) > 0.001f)
