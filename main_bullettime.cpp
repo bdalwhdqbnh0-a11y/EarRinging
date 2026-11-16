@@ -221,9 +221,9 @@ static bool AimHeld() { for (int i = 0; i < 8; ++i) if (g_TouchDown[i] && InAimZ
 static int   g_StripRoot = 1;
 // Bone twist: after the game has updated CJ's skeleton, the upper body (chest, arms, neck, head) is rotated about the vertical axis towards the aim, so the
 // legs keep the dive direction. Torso up to TorsoMax rad, the head turns up to HeadMax more. Rate = easing per frame.
-static int   g_BoneTwist = 1; static float g_TorsoMax = 1.25f, g_HeadMax = 0.45f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
-static float g_LegFollow = 1.0f;
-static int   g_TorsoTwist = 1; static float g_TwistMax = 1.35f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
+static int   g_BoneTwist = 1; static float g_TorsoMax = 1.5f, g_HeadMax = 0.6f, g_TwRate = 0.25f, g_TwWant = 0.f, g_TwCur = 0.f;
+static float g_LegFollow = 0.4f;
+static int   g_TorsoTwist = 1; static float g_TwistMax = 1.7f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 3.1f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
 static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
