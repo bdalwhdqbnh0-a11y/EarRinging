@@ -225,7 +225,7 @@ static int   g_BoneTwist = 1; static float g_TorsoMax = 1.5f, g_HeadMax = 0.6f, 
 static float g_LegFollow = 0.25f, g_TwLegs = 0.15f, g_TwBelly = 0.45f;   // body twist shares: hips+legs / belly (the chest gets the rest)
 static int   g_TorsoTwist = 1; static float g_TwistMax = 1.7f;   // upper body follows the aim while the legs keep the dive direction; twist limit in rad (about 77 degrees)
 static float g_YawLimit = 3.1f;   // max manual-aim swipe yaw away from the flight direction (rad); the log showed the camera spinning 70-260 degrees per dive
-static int   g_CamAnim = 0, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
+static int   g_CamAnim = 1, g_AirSteer = 0, g_BackTurn = 1, g_InfBar = 1, g_HideHud = 1, g_CamBack = 0, g_CamAxis = 1;
 static int   g_AutoAim = 1, g_TurnToTarget = 1;
 static float g_AimRange = 35.f, g_AimCone = 80.f;
 static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated switch is far too slow in slow motion)
@@ -492,7 +492,8 @@ static GetBlock_t g_GetBlock; static GetAnim_t g_GetAnim; static BlendAnim_t g_B
 static PadBool_t g_JumpDown; static PadAxis_t g_WalkLR, g_WalkUD; static PadWeapon_t g_PadWeapon; static PointGun_t g_PointGun;
 static WeaponFire_t g_WFire; static GetBonePos_t g_GetBone; static FindGroundZ_t g_GroundZ; static uint32_t* g_GameMs;
 typedef bool (*IsAlive_t)(void*);
-static void* g_Tgt = nullptr; static long long g_LastPick = 0;
+static void* g_Tgt = nullptr;
+ static long long g_LastPick = 0;
 static float g_AdjYaw = 0.f, g_AdjPitch = 0.f, g_LastTX[8] = {0}, g_LastTY[8] = {0}; static long long g_SwipeAt = 0; // swipe on the screen during a dive = aim by hand
 static IsAlive_t g_IsAlive = nullptr; static void** g_PedPoolSym = nullptr;
 static void* g_DiveBlock = nullptr;
@@ -572,6 +573,15 @@ static void LoadDiveAnims()
     LOGI("dive: block '%s' registered=%p lookup=%p hierarchies found %d/14 (dive_fwd=%p)", block, b, g_DiveBlock, ok, g_DiveHier[0]);
 }
 
+// new clip after a direction change: same phase of the flight as the old one (old time / old plateau time * new plateau time), never past its own plateau, so it comes in
+// as the last flight pose of that direction and never replays the take-off or runs into the get-up while still in the air
+static float PhaseT(int o, int n, float ct, float tt)
+{
+    float go = g_RootTab[o].tG, gn = g_RootTab[n].tG;
+    float nt = (go > 0.2f && gn > 0.2f) ? ct * gn / go : ct;
+    float hi = gn > 0.2f ? gn - 0.05f : tt - 0.1f;
+    return fminf(fmaxf(nt, 0.3f), hi);
+}
 enum { DS_NONE = 0, DS_FLY, DS_LAND };
 static int   g_DS = DS_NONE;
 static long long g_DStart = 0, g_DLand = 0, g_NextFire = 0;
@@ -936,7 +946,7 @@ static void DiveTick(void* ped, long long now)
                     g_CamPendDir = -1; ++g_SwCount;
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                     void* na = g_Blend(cl, h2, g_DiveFlags, 3.0f);            // slow cross-fade (0.33 s), the new clip continues at the same time
-                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = fminf(fmaxf(oldCt, 0.55f), tt - 0.1f); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 400; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
+                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 400; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
                     if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -3.0f;      // the old clip fades out over the same 0.33 s and is removed
                     g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
@@ -967,7 +977,7 @@ static void DiveTick(void* ped, long long now)
                     {
                         float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                         void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
-                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = fminf(fmaxf(oldCt, 0.55f), tt - 0.1f); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 400; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
+                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 400; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
                         g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1; ++g_SwCount;
                         float sp = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); g_DHv[0] = hx * sp; g_DHv[1] = hy * sp;
                         g_DFace[0] = fx; g_DFace[1] = fy; if (!g_Tgt && !(g_SwipeAt && now - g_SwipeAt < 2500)) { g_DAim[0] = fx; g_DAim[1] = fy; g_DAim[2] = 0.f; }
