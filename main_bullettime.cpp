@@ -232,6 +232,7 @@ static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated 
 static float g_CamDist = 2.3f, g_CamHeight = 0.95f, g_CamSide = 0.95f, g_CamLook = 9.0f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
+static long long g_XfadeUntil = 0;
 static int g_FlyPose = 1; static float g_FlyPoseRate = 1.1f;
 static float g_SwTime = 0.f; static long long g_SwUntil = 0;
 static int   g_SwCount = 0, g_AirSwitchMax = 2, g_CamPendDir = -1; static long long g_CamPendAt = 0;   // in-air animation switches this dive / allowed per dive / debounce
@@ -902,7 +903,7 @@ static void DiveTick(void* ped, long long now)
     {   // hold the mod clip at full weight until its last 0.3 s (something fades it out half way through)
         void* hh = *(void**)((uint8_t*)mine + 0x28);
         float tot = hh ? *(float*)((uint8_t*)hh + 0x18) : 0.f, ct = *(float*)((uint8_t*)mine + 0x38);
-        if (tot > 0.5f && ct < tot - 0.3f) { float* d = (float*)((uint8_t*)mine + 0x34); float* w = (float*)((uint8_t*)mine + 0x30); if (*d < 0.f) *d = 0.f; if (*w < 1.f) *w = 1.f; mw = *w; }
+        if (tot > 0.5f && ct < tot - 0.3f) { float* d = (float*)((uint8_t*)mine + 0x34); float* w = (float*)((uint8_t*)mine + 0x30); if (*d < 0.f) *d = 0.f; if (*w < 1.f && now >= g_XfadeUntil) *w = 1.f; mw = *w; }   // (during a direction change the new clip fades in for real, no forced full weight)
     }
     void* clump = *(void**)((uint8_t*)ped + 0x20);
     bool fadeWin = false;
@@ -960,9 +961,9 @@ static void DiveTick(void* ped, long long now)
                 {
                     g_CamPendDir = -1; ++g_SwCount;
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
-                    void* na = g_Blend(cl, h2, g_DiveFlags, 3.0f);            // slow cross-fade (0.33 s), the new clip continues at the same time
-                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
-                    if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -3.0f;      // the old clip fades out over the same 0.33 s and is removed
+                    void* na = g_Blend(cl, h2, g_DiveFlags, 2.5f);            // slow cross-fade (0.33 s), the new clip continues at the same time
+                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
+                    if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -2.5f;      // the old clip fades out over the same 0.33 s and is removed
                     g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
                 }
@@ -992,7 +993,7 @@ static void DiveTick(void* ped, long long now)
                     {
                         float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                         void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
-                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
+                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
                         g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1; ++g_SwCount;
                         float sp = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); g_DHv[0] = hx * sp; g_DHv[1] = hy * sp;
                         g_DFace[0] = fx; g_DFace[1] = fy; if (!g_Tgt && !(g_SwipeAt && now - g_SwipeAt < 2500)) { g_DAim[0] = fx; g_DAim[1] = fy; g_DAim[2] = 0.f; }
