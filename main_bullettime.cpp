@@ -232,10 +232,10 @@ static int   g_CamRear = 1, g_CamSwitch = 2;   // 2 = jump cut (an interpolated 
 static float g_CamDist = 2.3f, g_CamHeight = 0.95f, g_CamSide = 0.95f, g_CamLook = 9.0f, g_CamSmooth = 7.f;
 static float g_Grav = 9.81f;                               // m/s^2 used for our own flight arc
 static float g_DPos[3] = {0,0,0}; static float g_DFace[2] = {0,1};
-static long long g_XfadeUntil = 0;
+static long long g_XfadeUntil = 0; static float g_SwDeg = 30.f;
 static int g_FlyPose = 1; static float g_FlyPoseRate = 1.1f;
 static float g_SwTime = 0.f; static long long g_SwUntil = 0;
-static int   g_SwCount = 0, g_AirSwitchMax = 2, g_CamPendDir = -1; static long long g_CamPendAt = 0;   // in-air animation switches this dive / allowed per dive / debounce
+static int   g_SwCount = 0, g_AirSwitchMax = 4, g_CamPendDir = -1; static long long g_CamPendAt = 0;   // in-air animation switches this dive / allowed per dive / debounce
 static float g_DVz = 0.f, g_DOff = 1.f; static uint32_t g_DLastG = 0;
 
 static void LoadConfig()
@@ -332,6 +332,7 @@ static void LoadConfig()
         else if (!strcasecmp(k, "TwistBelly")) g_TwBelly = fminf(0.8f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "FlyPose")) g_FlyPose = atoi(v);
         else if (!strcasecmp(k, "FlyPoseRate")) g_FlyPoseRate = fminf(4.f, fmaxf(0.3f, (float)atof(v)));
+        else if (!strcasecmp(k, "SwitchDeg")) g_SwDeg = fminf(80.f, fmaxf(10.f, (float)atof(v)));
         else if (!strcasecmp(k, "LegFollow")) g_LegFollow = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "TorsoTwist")) g_TorsoTwist = atoi(v);
         else if (!strcasecmp(k, "TwistMax")) g_TwistMax = fminf(3.1f, fmaxf(0.3f, (float)atof(v)));
@@ -584,15 +585,6 @@ static float PhaseT(int o, int n, float ct, float tt)
     (void)o; (void)ct;
     float gn = g_RootTab[n].tG, hi = gn > 0.2f ? gn - 0.05f : tt - 0.1f;
     return fminf(1.05f, hi);   // the clips hold their stretched pose between ~0.9 and 1.2 s; 0.8 s is the arm swing into it (the "hands jumping" look)
-}
-// jump a playing clip to a time the proper way: CAnimBlendAssociation::SetCurrentTime also re-seeks every bone node's key frame. Writing +0x38 alone left the nodes on stale key frames
-// (the pose stepped / replayed from the old key frames while the clock said "last flight pose")
-typedef void (*SetCT_t)(void*, float);
-static SetCT_t g_SetCT = nullptr;
-static void SetAssocTime(void* a, float t)
-{
-    if (!a) return;
-    if (g_SetCT) g_SetCT(a, t); else *(float*)((uint8_t*)a + 0x38) = t;
 }
 enum { DS_NONE = 0, DS_FLY, DS_LAND };
 static int   g_DS = DS_NONE;
@@ -898,14 +890,14 @@ static void DiveTick(void* ped, long long now)
     {   // the video: the clip crawled through its upright take-off (arms up) for seconds and only reached the stretched pose at touch-down. Reach the stretched pose
         // (clip time ~1.0 s) quickly, then hold it for the rest of the flight, like the reference pictures
         float* ctp = (float*)((uint8_t*)mine + 0x38); float tg = fminf(1.05f, (float)(now - g_DStart) / 1000.f * g_FlyPoseRate);
-        if (*ctp < tg) SetAssocTime(mine, tg);
-        else if (*ctp > 1.12f) SetAssocTime(mine, 1.12f);
+        if (*ctp < tg) *ctp = tg;
+        if (*ctp > 1.12f) *ctp = 1.12f;
     }
     if (mine && now < g_SwUntil)
     {   // keep the new clip from ever going back in time after a direction change (the engine restarts it at 0 = the dive replays)
         float* ctp = (float*)((uint8_t*)mine + 0x38);
-        if (g_DS == DS_FLY) { if (*ctp < g_SwTime - 0.01f || *ctp > g_SwTime + 0.04f) SetAssocTime(mine, fminf(fmaxf(*ctp, g_SwTime), g_SwTime + 0.04f)); }   // hold the last flight pose until touch-down
-        else if (*ctp < g_SwTime - 0.01f) SetAssocTime(mine, g_SwTime);
+        if (g_DS == DS_FLY) { if (*ctp < g_SwTime - 0.01f || *ctp > g_SwTime + 0.04f) *ctp = fminf(fmaxf(*ctp, g_SwTime), g_SwTime + 0.04f); }   // hold the last flight pose until touch-down
+        else if (*ctp < g_SwTime - 0.01f) *ctp = g_SwTime;
         static long long lw = 0; if (g_DiveLog && now - lw > 120 && now < g_SwUntil - 27000) { lw = now; LOGI("dive: switch watch ct=%.2f w=%.2f d=%.1f spd=%.2f", *ctp, *(float*)((uint8_t*)mine + 0x30), *(float*)((uint8_t*)mine + 0x34), *(float*)((uint8_t*)mine + 0x3C)); }
     }   // the engine restarted the new clip at 0: put it back in the flight phase
     if (mine)
@@ -958,9 +950,11 @@ static void DiveTick(void* ped, long long now)
             float a = atan2f(r, f) * 57.29578f;                                 // 0 fwd, 90 right, +-180 back, -90 left
             static const float ctr[4] = { 0.f, 180.f, -90.f, 90.f };            // fwd, bkw, left, right
             float dc = fabsf(a - ctr[g_CurDir]); if (g_CurDir == 1) dc = 180.f - fabsf(a); else if (dc > 180.f) dc = 360.f - dc;
-            if (dc > 52.f)                                                      // 45 degrees + 7 of hysteresis
-            {
-                int nd = fabsf(a) <= 45.f ? 0 : fabsf(a) >= 135.f ? 1 : (a < 0 ? 2 : 3);
+            (void)dc;
+            {   // small turns count: the side clip starts at g_SwDeg degrees off the camera (30 by default), the way back to forward needs less than 60% of that (no flicker)
+                int nd = g_CurDir; float aa = fabsf(a);
+                if (g_CurDir == 0) { if (aa > g_SwDeg) nd = a < 0 ? 2 : 3; }
+                else if (g_CurDir == 2 || g_CurDir == 3) { if (aa < g_SwDeg * 0.6f) nd = 0; else if (aa > g_SwDeg && ((a < 0) != (g_CurDir == 2))) nd = a < 0 ? 2 : 3; }
                 if (nd == 1) nd = g_CurDir;                                     // never switch to the backward clip in the air (he falls on his back; BackTurn only works at take-off)
                 int var = g_DAnim % 3; void* h2 = g_DiveHier[nd * 3 + var] ? g_DiveHier[nd * 3 + var] : g_DiveHier[nd * 3]; void* cl = *(void**)((uint8_t*)ped + 0x20);
                 bool want = (nd != g_CurDir && (g_DAnim / 3) != nd && h2 && cl && g_Blend);
@@ -970,14 +964,13 @@ static void DiveTick(void* ped, long long now)
                 {
                     g_CamPendDir = -1; ++g_SwCount;
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
-                    void* na = g_Blend(cl, h2, g_DiveFlags, 2.5f);            // slow cross-fade (0.33 s), the new clip continues at the same time
-                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); SetAssocTime(na, nt); g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
-                    if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -2.5f;      // the old clip fades out over the same 0.33 s and is removed
+                    void* na = g_Blend(cl, h2, g_DiveFlags, 12.0f);            // slow cross-fade (0.33 s), the new clip continues at the same time
+                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 700; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
+                    if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -12.0f;      // the old clip fades out over the same 0.33 s and is removed
                     g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
                 }
             }
-            else g_CamPendDir = -1;
         }
     }
     if (g_DS == DS_FLY && g_AirSteer && g_GetPad && g_WalkLR && g_WalkUD && el > 150 && g_SwCount < g_AirSwitchMax)
@@ -1002,7 +995,7 @@ static void DiveTick(void* ped, long long now)
                     {
                         float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                         void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
-                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); SetAssocTime(na, nt); g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
+                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 700; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
                         g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1; ++g_SwCount;
                         float sp = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); g_DHv[0] = hx * sp; g_DHv[1] = hy * sp;
                         g_DFace[0] = fx; g_DFace[1] = fy; if (!g_Tgt && !(g_SwipeAt && now - g_SwipeAt < 2500)) { g_DAim[0] = fx; g_DAim[1] = fy; g_DAim[2] = 0.f; }
@@ -1278,8 +1271,6 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     *(void**)&g_WalkLR = (void*)ResolveExact("_ZN4CPad19GetPedWalkLeftRightEv");
     *(void**)&g_WalkUD = (void*)ResolveExact("_ZN4CPad16GetPedWalkUpDownEv");
     *(void**)&g_PadWeapon = (void*)ResolveExact("_ZN4CPad9GetWeaponEP4CPedb");
-    *(void**)&g_SetCT = (void*)ResolveExact("_ZN21CAnimBlendAssociation14SetCurrentTimeEf");
-    LOGI("anim time symbol: setcurrenttime=%p", (void*)g_SetCT);
     *(void**)&g_PointGun = (void*)ResolveExact("_ZN6CPedIK18PointGunAtPositionERK7CVectorf");
     *(void**)&g_WFire = (void*)ResolveExact("_ZN7CWeapon4FireEP7CEntityP7CVectorS3_S1_S3_S3_");
     *(void**)&g_GetBone = (void*)ResolveExact("_ZN4CPed15GetBonePositionER5RwV3djb");
