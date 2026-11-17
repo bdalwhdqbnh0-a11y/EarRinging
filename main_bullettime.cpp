@@ -585,6 +585,15 @@ static float PhaseT(int o, int n, float ct, float tt)
     float gn = g_RootTab[n].tG, hi = gn > 0.2f ? gn - 0.05f : tt - 0.1f;
     return fminf(1.05f, hi);   // the clips hold their stretched pose between ~0.9 and 1.2 s; 0.8 s is the arm swing into it (the "hands jumping" look)
 }
+// jump a playing clip to a time the proper way: CAnimBlendAssociation::SetCurrentTime also re-seeks every bone node's key frame. Writing +0x38 alone left the nodes on stale key frames
+// (the pose stepped / replayed from the old key frames while the clock said "last flight pose")
+typedef void (*SetCT_t)(void*, float);
+static SetCT_t g_SetCT = nullptr;
+static void SetAssocTime(void* a, float t)
+{
+    if (!a) return;
+    if (g_SetCT) g_SetCT(a, t); else *(float*)((uint8_t*)a + 0x38) = t;
+}
 enum { DS_NONE = 0, DS_FLY, DS_LAND };
 static int   g_DS = DS_NONE;
 static long long g_DStart = 0, g_DLand = 0, g_NextFire = 0;
@@ -889,14 +898,14 @@ static void DiveTick(void* ped, long long now)
     {   // the video: the clip crawled through its upright take-off (arms up) for seconds and only reached the stretched pose at touch-down. Reach the stretched pose
         // (clip time ~1.0 s) quickly, then hold it for the rest of the flight, like the reference pictures
         float* ctp = (float*)((uint8_t*)mine + 0x38); float tg = fminf(1.05f, (float)(now - g_DStart) / 1000.f * g_FlyPoseRate);
-        if (*ctp < tg) *ctp = tg;
-        if (*ctp > 1.12f) *ctp = 1.12f;
+        if (*ctp < tg) SetAssocTime(mine, tg);
+        else if (*ctp > 1.12f) SetAssocTime(mine, 1.12f);
     }
     if (mine && now < g_SwUntil)
     {   // keep the new clip from ever going back in time after a direction change (the engine restarts it at 0 = the dive replays)
         float* ctp = (float*)((uint8_t*)mine + 0x38);
-        if (g_DS == DS_FLY) { if (*ctp < g_SwTime - 0.01f || *ctp > g_SwTime + 0.04f) *ctp = fminf(fmaxf(*ctp, g_SwTime), g_SwTime + 0.04f); }   // hold the last flight pose until touch-down
-        else if (*ctp < g_SwTime - 0.01f) *ctp = g_SwTime;
+        if (g_DS == DS_FLY) { if (*ctp < g_SwTime - 0.01f || *ctp > g_SwTime + 0.04f) SetAssocTime(mine, fminf(fmaxf(*ctp, g_SwTime), g_SwTime + 0.04f)); }   // hold the last flight pose until touch-down
+        else if (*ctp < g_SwTime - 0.01f) SetAssocTime(mine, g_SwTime);
         static long long lw = 0; if (g_DiveLog && now - lw > 120 && now < g_SwUntil - 27000) { lw = now; LOGI("dive: switch watch ct=%.2f w=%.2f d=%.1f spd=%.2f", *ctp, *(float*)((uint8_t*)mine + 0x30), *(float*)((uint8_t*)mine + 0x34), *(float*)((uint8_t*)mine + 0x3C)); }
     }   // the engine restarted the new clip at 0: put it back in the flight phase
     if (mine)
@@ -962,7 +971,7 @@ static void DiveTick(void* ped, long long now)
                     g_CamPendDir = -1; ++g_SwCount;
                     float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                     void* na = g_Blend(cl, h2, g_DiveFlags, 2.5f);            // slow cross-fade (0.33 s), the new clip continues at the same time
-                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
+                    if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, nd * 3 + var, oldCt, tt); SetAssocTime(na, nt); g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; LOGI("dive: switch oldCt=%.2f newT=%.2f total=%.2f", oldCt, nt, tt); }
                     if (mine && mine != na) *(float*)((uint8_t*)mine + 0x34) = -2.5f;      // the old clip fades out over the same 0.33 s and is removed
                     g_DAnim = nd * 3 + var; g_CurDir = nd; g_SwitchAt = now;
                     LOGI("dive: camera turned -> animation %d (angle %.0f) at %lld ms", g_DAnim, a, el);
@@ -993,7 +1002,7 @@ static void DiveTick(void* ped, long long now)
                     {
                         float oldCt = mine ? *(float*)((uint8_t*)mine + 0x38) : 0.f;
                         void* na = g_Blend(cl, h2, g_DiveFlags, g_DiveAnimBlend);
-                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); *(float*)((uint8_t*)na + 0x38) = nt; g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
+                        if (na) { float tt = *(float*)((uint8_t*)h2 + 0x18); float nt = PhaseT(g_DAnim, ad * 3 + var, oldCt, tt); SetAssocTime(na, nt); g_DAssoc = na; g_SwTime = nt; g_SwUntil = now + 30000; g_XfadeUntil = now + 450; }   // same time-continuity fix as the camera switch: the engine restarts the new clip at 0 (= the dive replays)
                         g_DAnim = ad * 3 + var; g_CurDir = nd; g_SwitchAt = now; g_PendDir = -1; ++g_SwCount;
                         float sp = sqrtf(g_DHv[0] * g_DHv[0] + g_DHv[1] * g_DHv[1]); g_DHv[0] = hx * sp; g_DHv[1] = hy * sp;
                         g_DFace[0] = fx; g_DFace[1] = fy; if (!g_Tgt && !(g_SwipeAt && now - g_SwipeAt < 2500)) { g_DAim[0] = fx; g_DAim[1] = fy; g_DAim[2] = 0.f; }
@@ -1269,6 +1278,8 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     *(void**)&g_WalkLR = (void*)ResolveExact("_ZN4CPad19GetPedWalkLeftRightEv");
     *(void**)&g_WalkUD = (void*)ResolveExact("_ZN4CPad16GetPedWalkUpDownEv");
     *(void**)&g_PadWeapon = (void*)ResolveExact("_ZN4CPad9GetWeaponEP4CPedb");
+    *(void**)&g_SetCT = (void*)ResolveExact("_ZN21CAnimBlendAssociation14SetCurrentTimeEf");
+    LOGI("anim time symbol: setcurrenttime=%p", (void*)g_SetCT);
     *(void**)&g_PointGun = (void*)ResolveExact("_ZN6CPedIK18PointGunAtPositionERK7CVectorf");
     *(void**)&g_WFire = (void*)ResolveExact("_ZN7CWeapon4FireEP7CEntityP7CVectorS3_S1_S3_S3_");
     *(void**)&g_GetBone = (void*)ResolveExact("_ZN4CPed15GetBonePositionER5RwV3djb");
