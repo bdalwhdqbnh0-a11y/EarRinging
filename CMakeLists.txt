@@ -48,3 +48,10 @@ target_include_directories(BulletTime PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(BulletTime PRIVATE -O2 -Wno-unused-function)
 target_link_libraries(BulletTime log dl m)
+
+# --- BloodStains (blood where a ped is hit, phase 1) ---
+add_library(BloodStains SHARED main_blood.cpp ${AML_SOURCES})
+target_include_directories(BloodStains PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(BloodStains PRIVATE -O2 -Wno-unused-function)
+target_link_libraries(BloodStains log dl m)
