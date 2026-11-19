@@ -55,3 +55,10 @@ target_include_directories(BloodStains PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(BloodStains PRIVATE -O2 -Wno-unused-function)
 target_link_libraries(BloodStains log dl m)
+
+# --- WeaponChange (weapon change animation like GTA 5) ---
+add_library(WeaponChange SHARED main_weapchange.cpp ${AML_SOURCES})
+target_include_directories(WeaponChange PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(WeaponChange PRIVATE -O2 -Wno-unused-function)
+target_link_libraries(WeaponChange log dl m)
