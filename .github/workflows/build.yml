@@ -71,6 +71,12 @@ jobs:
           name: BloodStains-arm64
           path: build/libBloodStains.so
 
+      - name: Upload WeaponChange
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeaponChange-arm64
+          path: build/libWeaponChange.so
+
       - name: Publish download link (release "latest")
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
@@ -86,3 +92,4 @@ jobs:
             build/libEarShot.so
             build/libBloodStains.so
             build/libBulletTime.so
+            build/libWeaponChange.so
