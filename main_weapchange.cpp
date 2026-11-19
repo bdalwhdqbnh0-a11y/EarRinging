@@ -115,6 +115,7 @@ static long long NowMs() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); ret
 
 // ---------------------------------------------------------------- settings (WeaponChange.ini)
 static int   g_Enabled = 1, g_Log2 = 1, g_Flags = 0x14;
+static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
 static void LoadConfig()
 {
@@ -124,7 +125,7 @@ static void LoadConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -139,6 +140,7 @@ static void LoadConfig()
         if (!strcasecmp(k, "Enabled")) g_Enabled = atoi(v);
         else if (!strcasecmp(k, "AnimationSpeedStart")) g_StartSpeed = (float)atof(v);
         else if (!strcasecmp(k, "AnimationSpeed")) g_Speed = (float)atof(v);
+        else if (!strcasecmp(k, "SwapAt")) g_SwapAt = fminf(0.95f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "AnimFlags")) g_Flags = (int)strtol(v, nullptr, 0);
         else if (!strcasecmp(k, "Log")) g_Log2 = atoi(v);
     }
@@ -187,25 +189,42 @@ static void LoadIfp()
 
 // ---------------------------------------------------------------- weapon change
 static int g_LastSlot = -2; static long long g_Born = 0, g_LastPlay = 0;
+static void* g_PendPed = nullptr; static int g_PendSlot = -1; static long long g_PendDue = 0;
 typedef void (*SetCurWeaponSlot_t)(void*, int); static SetCurWeaponSlot_t SetCur_orig = nullptr;
 static void SetCur_hook(void* ped, int slot)
 {
-    SetCur_orig(ped, slot);
-    if (!g_Enabled || !g_FindPlayer || ped != g_FindPlayer(0)) return;
+    if (!g_Enabled || !g_FindPlayer || ped != g_FindPlayer(0)) { SetCur_orig(ped, slot); return; }
     long long now = NowMs();
-    if (g_LastSlot == -2 || now - g_Born < 3000) { g_LastSlot = slot; return; }      // first call / game just started: no animation
-    if (slot == g_LastSlot) return;
-    g_LastSlot = slot;
+    if (g_PendPed == ped && g_PendSlot >= 0) { g_PendSlot = slot; g_LastSlot = slot; return; }       // already changing: just retarget
+    if (g_LastSlot == -2 || now - g_Born < 3000) { g_LastSlot = slot; SetCur_orig(ped, slot); return; }
+    if (slot == g_LastSlot) { SetCur_orig(ped, slot); return; }
     bool ok = (!g_IsAlive || g_IsAlive(ped)) && (!g_InControl || g_InControl(ped)) && !(g_CutRunning && *g_CutRunning) && !(g_CutProc && *g_CutProc) && now - g_LastPlay > 350;
     if (g_Log2) LOGI("weapon slot -> %d (conditions %s)", slot, ok ? "ok" : "blocked");
-    if (!ok) return;
+    g_LastSlot = slot;
+    if (!ok) { SetCur_orig(ped, slot); return; }
     LoadIfp();
     void* clump = *(void**)((uint8_t*)ped + 0x20);
-    if (!g_Hier || !clump || !g_Blend) return;
+    if (!g_Hier || !clump || !g_Blend) { SetCur_orig(ped, slot); return; }
     void* a = g_Blend(clump, g_Hier, g_Flags, g_StartSpeed);
-    if (a) *(float*)((uint8_t*)a + 0x3C) = g_Speed;
+    if (!a) { SetCur_orig(ped, slot); return; }
+    *(float*)((uint8_t*)a + 0x3C) = g_Speed;
+    float total = *(float*)((uint8_t*)g_Hier + 0x18); if (!(total > 0.05f && total < 10.f)) total = 1.03f;
+    float delayMs = g_SwapAt * total / fmaxf(0.1f, g_Speed) * 1000.f;
     g_LastPlay = now;
-    if (g_Log2) LOGI("played 'switch' assoc=%p speed %.1f", a, g_Speed);
+    if (delayMs < 20.f) { SetCur_orig(ped, slot); return; }
+    g_PendPed = ped; g_PendSlot = slot; g_PendDue = now + (long long)delayMs;      // the weapon itself changes in the middle of the animation
+    if (g_Log2) LOGI("played 'switch' assoc=%p speed %.1f total %.2f s, new weapon in %.0f ms", a, g_Speed, total, delayMs);
+}
+
+typedef void (*TimerUpdate_t)(); static TimerUpdate_t TimerUpdate_orig = nullptr;
+static void TimerUpdate_hook()
+{
+    TimerUpdate_orig();
+    if (g_PendPed && NowMs() >= g_PendDue)
+    {
+        void* ped = g_PendPed; int slot = g_PendSlot; g_PendPed = nullptr; g_PendSlot = -1;
+        if (g_FindPlayer && ped == g_FindPlayer(0)) { SetCur_orig(ped, slot); if (g_Log2) LOGI("new weapon slot %d applied", slot); }
+    }
 }
 
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
@@ -231,4 +250,5 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     LOGI("symbols: reg=%p load=%p open=%p close=%p block=%p anim=%p blend=%p player=%p control=%p alive=%p cut=%p/%p",
          (void*)g_RegBlock, (void*)g_LoadAnim, (void*)g_StreamOpen, (void*)g_StreamClose, (void*)g_GetBlock, (void*)g_GetAnim, (void*)g_Blend, (void*)g_FindPlayer, (void*)g_InControl, (void*)g_IsAlive, g_CutRunning, g_CutProc);
     Install("_ZN4CPed16SetCurrentWeaponEi", (void*)SetCur_hook, &SetCur_orig);
+    Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
 }
