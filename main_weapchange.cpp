@@ -283,6 +283,7 @@ static void PedRender_hook(void* ped)
 
 // ---------------------------------------------------------------- settings (WeaponChange.ini - weapon change animation)
 static int   g_ChEnabled = 1, g_Flags = 0x14;
+static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static float g_DeathVol = 1.0f;
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
@@ -294,7 +295,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (1.0 = normal)\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -311,6 +312,10 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "AnimationSpeed")) g_Speed = (float)atof(v);
         else if (!strcasecmp(k, "FadeAt")) g_FadeAt = fminf(1.f, fmaxf(0.1f, (float)atof(v)));
         else if (!strcasecmp(k, "FadeRate")) g_FadeRate = fmaxf(1.f, (float)atof(v));
+        else if (!strcasecmp(k, "DeathScreen")) g_DeathScreen = atoi(v);
+        else if (!strcasecmp(k, "DeathSound")) g_DeathSound = atoi(v);
+        else if (!strcasecmp(k, "DeathSoundVolume")) g_DeathVol = fminf(4.f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "DeathAlpha")) g_DeathAlpha = fminf(255.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "SwapAt")) g_SwapAt = fminf(0.95f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "AnimFlags")) g_Flags = (int)strtol(v, nullptr, 0);
         else if (!strcasecmp(k, "Log")) g_Log2 = atoi(v);
@@ -416,6 +421,95 @@ static void TimerUpdate_hook()
 }
 
 
+
+
+// ---------------------------------------------------------------- death sound (wasted.wav through the game's own OpenAL)
+typedef unsigned int ALuint;
+static void (*alGenBuffers_)(int, ALuint*) = nullptr; static void (*alGenSources_)(int, ALuint*) = nullptr;
+static void (*alBufferData_)(ALuint, int, const void*, int, int) = nullptr; static void (*alSourcei_)(ALuint, int, int) = nullptr; static void (*alSourcef_)(ALuint, int, float) = nullptr;
+static void (*alSourcePlay_)(ALuint) = nullptr; static void (*alSourceStop_)(ALuint) = nullptr; static int (*alGetError_)() = nullptr; static void* (*alcCur_)() = nullptr;
+static ALuint g_SndBuf = 0, g_SndSrc = 0; static bool g_SndTried = false, g_SndOk = false;
+static bool LoadWav()
+{
+    FILE* f = fopen((g_Dir + "wasted.wav").c_str(), "rb"); if (!f) { LOGE("wasted.wav not found in %s", g_Dir.c_str()); return false; }
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    std::vector<uint8_t> d; if (sz > 44 && sz < 32 * 1024 * 1024) { d.resize(sz); if (fread(d.data(), 1, sz, f) != (size_t)sz) d.clear(); }
+    fclose(f);
+    if (d.size() < 44 || memcmp(d.data(), "RIFF", 4) || memcmp(d.data() + 8, "WAVE", 4)) { LOGE("wasted.wav is not a WAV file"); return false; }
+    int ch = 0, bits = 0, rate = 0; const uint8_t* pcm = nullptr; uint32_t pcmLen = 0;
+    size_t o = 12;
+    while (o + 8 <= d.size())
+    {
+        uint32_t len = *(uint32_t*)(d.data() + o + 4); const uint8_t* body = d.data() + o + 8;
+        if (!memcmp(d.data() + o, "fmt ", 4) && o + 8 + 16 <= d.size()) { ch = *(uint16_t*)(body + 2); rate = *(uint32_t*)(body + 4); bits = *(uint16_t*)(body + 14); if (*(uint16_t*)body != 1) { LOGE("wasted.wav must be PCM"); return false; } }
+        else if (!memcmp(d.data() + o, "data", 4)) { pcm = body; pcmLen = len; if (o + 8 + len > d.size()) pcmLen = (uint32_t)(d.size() - o - 8); break; }
+        o += 8 + len + (len & 1);
+    }
+    if (!pcm || bits != 16 || (ch != 1 && ch != 2) || rate < 8000) { LOGE("wasted.wav must be 16-bit PCM mono/stereo (got %d ch, %d bit, %d Hz)", ch, bits, rate); return false; }
+    alGetError_();
+    alGenBuffers_(1, &g_SndBuf); alGenSources_(1, &g_SndSrc);
+    alBufferData_(g_SndBuf, ch == 1 ? 0x1101 : 0x1103, pcm, (int)pcmLen, rate);
+    alSourcei_(g_SndSrc, 0x1009, (int)g_SndBuf);          // AL_BUFFER
+    alSourcei_(g_SndSrc, 0x202, 1);                       // AL_SOURCE_RELATIVE: heard from the listener, not from a place in the world
+    alSourcei_(g_SndSrc, 0x1007, 0);                      // not looping
+    int err = alGetError_();
+    LOGI("wasted.wav loaded: %d ch %d Hz %u bytes, buffer %u source %u, al error 0x%x", ch, rate, pcmLen, g_SndBuf, g_SndSrc, err);
+    return err == 0;
+}
+static void PlayDeathSound()
+{
+    if (!g_DeathSound || !alGenBuffers_ || !alGenSources_ || !alBufferData_ || !alSourcei_ || !alSourcePlay_ || !alGetError_) return;
+    if (alcCur_ && !alcCur_()) { if (g_Log2) LOGI("no OpenAL context yet"); return; }
+    if (!g_SndTried) { g_SndTried = true; g_SndOk = LoadWav(); }
+    if (!g_SndOk) return;
+    if (alSourceStop_) alSourceStop_(g_SndSrc);
+    if (alSourcef_) alSourcef_(g_SndSrc, 0x100A, g_DeathVol);   // AL_GAIN
+    alSourcePlay_(g_SndSrc);
+    if (g_Log2) LOGI("death sound played (al error 0x%x)", alGetError_());
+}
+
+// ---------------------------------------------------------------- death screen (red 'wasted' look)
+static void (*g_DrawRectD)(const float*, const uint8_t*) = nullptr; static int (*g_OSW)() = nullptr; static int (*g_OSH)() = nullptr;
+static long long g_DeadSince = 0, g_AliveSince = 0; static float g_DeathFade = 0.f;
+static float DFrand(uint32_t& s2) { s2 = s2 * 1664525u + 1013904223u; return (float)((s2 >> 8) & 0xFFFF) / 65535.f; }
+static void DrawDeathScreen()
+{
+    if (!g_DeathScreen || !g_DrawRectD || !g_OSW || !g_OSH || !g_FindPlayer || !g_IsAlive) return;
+    void* pl = g_FindPlayer(0); if (!pl) return;
+    long long now = NowMs();
+    bool dead = !g_IsAlive(pl);
+    if (dead) { if (!g_DeadSince) { g_DeadSince = now; if (g_Log2) LOGI("player died: death screen on"); PlayDeathSound(); } g_AliveSince = 0; }
+    else { if (g_DeadSince && !g_AliveSince) g_AliveSince = now; }
+    if (!g_DeadSince) return;
+    float t = (now - g_DeadSince) / 1000.f;
+    float target = dead ? 1.f : 0.f;
+    g_DeathFade += (target - g_DeathFade) * (dead ? 0.06f : 0.18f);
+    if (!dead && g_DeathFade < 0.02f) { g_DeadSince = 0; g_DeathFade = 0.f; return; }
+    float W = (float)g_OSW(), H = (float)g_OSH(), k = H / 1080.f;
+    float f = g_DeathFade, pulse = 0.92f + 0.08f * sinf(t * 5.f);
+    auto rect = [&](float l, float b, float r, float tp, uint8_t cr, uint8_t cg, uint8_t cb, float a) { float rc[4] = { l, b, r, tp }; uint8_t c[4] = { cr, cg, cb, (uint8_t)fminf(255.f, fmaxf(0.f, a)) }; g_DrawRectD(rc, c); };
+    // base: dark red wash
+    rect(0, H, W, 0, 70, 0, 6, g_DeathAlpha * f * pulse);
+    // vignette: darker bands that thicken toward the edges
+    for (int i = 0; i < 10; ++i)
+    {
+        float bw = (0.02f + 0.018f * i) * W * 0.5f, bh = (0.02f + 0.018f * i) * H * 0.5f, a = 26.f * f;
+        rect(0, H, bw, 0, 25, 0, 2, a); rect(W - bw, H, W, 0, 25, 0, 2, a); rect(0, bh, W, 0, 25, 0, 2, a); rect(0, H, W, H - bh, 25, 0, 2, a);
+    }
+    // blood blots that burst out one after another
+    uint32_t seed = 12345u;
+    for (int i = 0; i < 16; ++i)
+    {
+        float cx = (0.12f + 0.76f * DFrand(seed)) * W, cy = (0.15f + 0.7f * DFrand(seed)) * H, rmax = (60.f + 150.f * DFrand(seed)) * k, t0 = 0.05f + 0.09f * i;
+        float u = (t - t0) / 0.55f; if (u <= 0.f) continue; u = fminf(1.f, u); u = 1.f - (1.f - u) * (1.f - u);
+        float r = rmax * u, a = 150.f * f * (0.6f + 0.4f * u);
+        rect(cx - r, cy + r, cx + r, cy - r, 150, 4, 10, a);
+        for (int j = 0; j < 6; ++j) { float ang = DFrand(seed) * 6.2832f, d = r * (0.7f + 0.8f * DFrand(seed)), rr = r * (0.18f + 0.3f * DFrand(seed)); rect(cx + cosf(ang) * d - rr, cy + sinf(ang) * d + rr, cx + cosf(ang) * d + rr, cy + sinf(ang) * d - rr, 130, 2, 8, a * 0.9f); }
+    }
+}
+typedef void (*DrawAll_t)(bool); static DrawAll_t DrawAll_orig = nullptr;
+static void DrawAll_hook(bool b) { DrawAll_orig(b); if (!b) DrawDeathScreen(); }
+
 extern "C" __attribute__((visibility("default"))) void OnModLoad()
 {
     g_Dir = DetectDir();
@@ -448,6 +542,14 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     g_CutRunning = (uint8_t*)ResolveExact("_ZN12CCutsceneMgr10ms_runningE");
     g_CutProc = (uint8_t*)ResolveExact("_ZN12CCutsceneMgr21ms_cutsceneProcessingE");
     LOGI("change symbols: reg=%p load=%p open=%p close=%p block=%p anim=%p blend=%p control=%p cut=%p/%p", (void*)g_RegBlock, (void*)g_LoadAnim, (void*)g_StreamOpen, (void*)g_StreamClose, (void*)g_GetBlock, (void*)g_GetAnim, (void*)g_Blend, (void*)g_InControl, g_CutRunning, g_CutProc);
+    *(void**)&g_DrawRectD = (void*)ResolveExact("_ZN9CSprite2d8DrawRectERK5CRectRK5CRGBA");
+    *(void**)&g_OSW = (void*)ResolveExact("_Z17OS_ScreenGetWidthv"); *(void**)&g_OSH = (void*)ResolveExact("_Z18OS_ScreenGetHeightv");
+    *(void**)&alGenBuffers_ = (void*)ResolveExact("alGenBuffers"); *(void**)&alGenSources_ = (void*)ResolveExact("alGenSources");
+    *(void**)&alBufferData_ = (void*)ResolveExact("alBufferData"); *(void**)&alSourcei_ = (void*)ResolveExact("alSourcei"); *(void**)&alSourcef_ = (void*)ResolveExact("alSourcef");
+    *(void**)&alSourcePlay_ = (void*)ResolveExact("alSourcePlay"); *(void**)&alSourceStop_ = (void*)ResolveExact("alSourceStop");
+    *(void**)&alGetError_ = (void*)ResolveExact("alGetError"); *(void**)&alcCur_ = (void*)ResolveExact("alcGetCurrentContext");
+    LOGI("openal: genbuf=%p gensrc=%p data=%p play=%p err=%p ctx=%p", (void*)alGenBuffers_, (void*)alGenSources_, (void*)alBufferData_, (void*)alSourcePlay_, (void*)alGetError_, (void*)alcCur_);
+    Install("_ZN15CTouchInterface7DrawAllEb", (void*)DrawAll_hook, &DrawAll_orig);
     Install("_ZN4CPed16SetCurrentWeaponEi", (void*)SetCur_hook, &SetCur_orig);
     Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
 }
