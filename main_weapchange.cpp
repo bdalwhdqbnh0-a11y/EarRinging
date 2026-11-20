@@ -496,15 +496,27 @@ static void DrawDeathScreen()
         float bw = (0.02f + 0.018f * i) * W * 0.5f, bh = (0.02f + 0.018f * i) * H * 0.5f, a = 26.f * f;
         rect(0, H, bw, 0, 25, 0, 2, a); rect(W - bw, H, W, 0, 25, 0, 2, a); rect(0, bh, W, 0, 25, 0, 2, a); rect(0, H, W, H - bh, 25, 0, 2, a);
     }
+    // a disc drawn as horizontal strips (the game only draws axis-aligned rectangles)
+    auto disc = [&](float cx, float cy, float r, uint8_t cr, uint8_t cg, uint8_t cb, float a)
+    {
+        int n = (int)(r / (5.f * k)); if (n < 5) n = 5; if (n > 18) n = 18;
+        float sh = 2.f * r / n;
+        for (int i = 0; i < n; ++i)
+        {
+            float y0 = -r + i * sh, y1 = y0 + sh, ym = (y0 + y1) * 0.5f, hw = sqrtf(fmaxf(0.f, r * r - ym * ym));
+            if (hw < 0.5f) continue;
+            rect(cx - hw, cy + y1, cx + hw, cy + y0, cr, cg, cb, a);
+        }
+    };
     // blood blots that burst out one after another
     uint32_t seed = 12345u;
-    for (int i = 0; i < 16; ++i)
+    for (int i = 0; i < 12; ++i)
     {
         float cx = (0.12f + 0.76f * DFrand(seed)) * W, cy = (0.15f + 0.7f * DFrand(seed)) * H, rmax = (60.f + 150.f * DFrand(seed)) * k, t0 = 0.05f + 0.09f * i;
         float u = (t - t0) / 0.55f; if (u <= 0.f) continue; u = fminf(1.f, u); u = 1.f - (1.f - u) * (1.f - u);
         float r = rmax * u, a = 150.f * f * (0.6f + 0.4f * u);
-        rect(cx - r, cy + r, cx + r, cy - r, 150, 4, 10, a);
-        for (int j = 0; j < 6; ++j) { float ang = DFrand(seed) * 6.2832f, d = r * (0.7f + 0.8f * DFrand(seed)), rr = r * (0.18f + 0.3f * DFrand(seed)); rect(cx + cosf(ang) * d - rr, cy + sinf(ang) * d + rr, cx + cosf(ang) * d + rr, cy + sinf(ang) * d - rr, 130, 2, 8, a * 0.9f); }
+        disc(cx, cy, r, 150, 4, 10, a);
+        for (int j = 0; j < 4; ++j) { float ang = DFrand(seed) * 6.2832f, d = r * (0.7f + 0.8f * DFrand(seed)), rr = r * (0.18f + 0.3f * DFrand(seed)); disc(cx + cosf(ang) * d, cy + sinf(ang) * d, rr, 130, 2, 8, a * 0.9f); }
     }
 }
 typedef void (*DrawAll_t)(bool); static DrawAll_t DrawAll_orig = nullptr;
