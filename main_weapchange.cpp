@@ -283,7 +283,7 @@ static void PedRender_hook(void* ped)
 
 // ---------------------------------------------------------------- settings (WeaponChange.ini - weapon change animation)
 static int   g_ChEnabled = 1, g_Flags = 0x14;
-static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f;
+static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static float g_BlackAt = 0.f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f;
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
@@ -295,7 +295,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds after death when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -316,6 +316,7 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "DeathSound")) g_DeathSound = atoi(v);
         else if (!strcasecmp(k, "DeathSlowMo")) g_DeathSlow = atoi(v);
         else if (!strcasecmp(k, "DeathSlowScale")) g_SlowScale = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
+        else if (!strcasecmp(k, "BlackScreenAt")) g_BlackAt = fmaxf(0.f, (float)atof(v));
         else if (!strcasecmp(k, "MuteWorldOnDeath")) g_MuteWorld = atoi(v);
         else if (!strcasecmp(k, "DeathSoundVolume")) g_DeathVol = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "DeathAlpha")) g_DeathAlpha = fminf(255.f, fmaxf(0.f, (float)atof(v)));
@@ -456,6 +457,7 @@ static bool LoadWav()
     alSourcei_(g_SndSrc, 0x202, 1);                       // AL_SOURCE_RELATIVE: heard from the listener, not from a place in the world
     alSourcei_(g_SndSrc, 0x1007, 0);                      // not looping
     int err = alGetError_();
+    g_SndDur = (float)pcmLen / (float)(rate * ch * 2);
     LOGI("wasted.wav loaded: %d ch %d Hz %u bytes, buffer %u source %u, al error 0x%x", ch, rate, pcmLen, g_SndBuf, g_SndSrc, err);
     return err == 0;
 }
@@ -499,7 +501,10 @@ static void SlowMo(bool dead, float t)
     {
         if (!g_SlowOn) { g_SavedScale = *g_TimeScaleD; if (!(g_SavedScale > 0.05f && g_SavedScale <= 1.5f)) g_SavedScale = 1.f; g_SlowOn = true; if (g_Log2) LOGI("slow motion on (was %.2f)", g_SavedScale); }
         float u = fminf(1.f, t / 0.5f);
-        *g_TimeScaleD = 1.f + (g_SlowScale - 1.f) * u;
+        float tb0 = g_BlackAt > 0.f ? g_BlackAt : (g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f);
+        float back = fminf(1.f, fmaxf(0.f, (t - tb0) / 0.3f));          // normal speed again once the black screen is up, so the respawn is not dragged out
+        float sc = 1.f + (g_SlowScale - 1.f) * u;
+        *g_TimeScaleD = sc + (1.f - sc) * back;
     }
     else if (g_SlowOn) { *g_TimeScaleD = g_SavedScale; g_SlowOn = false; if (g_Log2) LOGI("slow motion off"); }
 }
@@ -561,6 +566,10 @@ static void DrawDeathScreen()
         disc(cx, cy, r, 170, 6, 16, a * 0.55f);
         for (int j = 0; j < 4; ++j) { float ang = DFrand(seed) * 6.2832f, d = r * (0.7f + 0.8f * DFrand(seed)), rr = r * (0.18f + 0.3f * DFrand(seed)); disc(cx + cosf(ang) * d, cy + sinf(ang) * d, rr, 150, 4, 12, a * 0.5f); }
     }
+    // when the sound ends: black screen, the word turns red
+    float tb = g_BlackAt > 0.f ? g_BlackAt : (g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f);
+    float bf = fminf(1.f, fmaxf(0.f, (t - tb) / 0.35f)) * f;
+    if (bf > 0.f) rect(0, H, W, 0, 0, 0, 0, 255.f * bf);
     // the word 'wasted': white, big, slightly zooming in, with a dark shadow
     {
         float tf = fminf(1.f, t / 0.45f); tf = 1.f - (1.f - tf) * (1.f - tf);
@@ -574,7 +583,7 @@ static void DrawDeathScreen()
             {
                 const unsigned short* q = kWastedRects[i];
                 float l = ox + q[0] * sc + dx, r = ox + q[2] * sc + dx, tp = oy + q[1] * sc + dy, bt = oy + q[3] * sc + dy;
-                if (pass == 0) rect(l, bt, r, tp, 20, 0, 0, ta * 0.55f); else rect(l, bt, r, tp, 255, 255, 255, ta);
+                if (pass == 0) rect(l, bt, r, tp, 20, 0, 0, ta * 0.55f * (1.f - bf)); else rect(l, bt, r, tp, (uint8_t)(255.f - 33.f * bf), (uint8_t)(255.f - 207.f * bf), (uint8_t)(255.f - 193.f * bf), ta);
             }
         }
     }
