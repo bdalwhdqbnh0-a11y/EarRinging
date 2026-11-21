@@ -283,7 +283,7 @@ static void PedRender_hook(void* ped)
 
 // ---------------------------------------------------------------- settings (WeaponChange.ini - weapon change animation)
 static int   g_ChEnabled = 1, g_Flags = 0x14;
-static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static float g_BlackAt = 0.f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f;
+static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static float g_BlackAt = 0.f; static float g_GreyTime = 1.5f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f;
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
@@ -295,7 +295,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds after death when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -316,6 +316,7 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "DeathSound")) g_DeathSound = atoi(v);
         else if (!strcasecmp(k, "DeathSlowMo")) g_DeathSlow = atoi(v);
         else if (!strcasecmp(k, "DeathSlowScale")) g_SlowScale = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
+        else if (!strcasecmp(k, "GreyScreenTime")) g_GreyTime = fminf(10.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "BlackScreenAt")) g_BlackAt = fmaxf(0.f, (float)atof(v));
         else if (!strcasecmp(k, "MuteWorldOnDeath")) g_MuteWorld = atoi(v);
         else if (!strcasecmp(k, "DeathSoundVolume")) g_DeathVol = fminf(1.f, fmaxf(0.f, (float)atof(v)));
@@ -501,7 +502,7 @@ static void SlowMo(bool dead, float t)
     {
         if (!g_SlowOn) { g_SavedScale = *g_TimeScaleD; if (!(g_SavedScale > 0.05f && g_SavedScale <= 1.5f)) g_SavedScale = 1.f; g_SlowOn = true; if (g_Log2) LOGI("slow motion on (was %.2f)", g_SavedScale); }
         float u = fminf(1.f, t / 0.5f);
-        float tb0 = g_BlackAt > 0.f ? g_BlackAt : (g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f);
+        float tb0 = g_GreyTime + (g_BlackAt > 0.f ? g_BlackAt : (g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f));
         float back = fminf(1.f, fmaxf(0.f, (t - tb0) / 0.3f));          // normal speed again once the black screen is up, so the respawn is not dragged out
         float sc = 1.f + (g_SlowScale - 1.f) * u;
         *g_TimeScaleD = sc + (1.f - sc) * back;
@@ -515,7 +516,7 @@ static const int kWastedW = 815, kWastedH = 192, kWastedN = 475;
 static const unsigned short kWastedRects[][4] = {{764,0,812,1},{763,1,812,2},{763,2,813,3},{762,3,813,13},{762,13,812,38},{97,38,107,39},{761,38,812,39},{758,39,812,40},{91,39,114,40},{223,40,294,41},{75,40,119,41},{2,40,46,41},{459,40,503,41},{149,40,192,41},{346,40,416,41},{599,40,670,41},{721,40,812,41},{0,41,47,42},{717,41,812,42},{220,41,298,42},{595,41,674,42},{458,41,504,42},{342,41,420,42},{74,41,121,42},{147,41,194,43},{593,42,676,43},{0,42,48,43},{217,42,300,43},{340,42,423,43},{73,42,121,43},{715,42,812,43},{457,42,505,44},{215,43,302,44},{713,43,812,44},{591,43,678,44},{338,43,425,44},{72,43,122,45},{457,44,506,45},{589,44,680,45},{213,44,304,45},{336,44,426,45},{711,44,812,45},{146,43,194,46},{456,45,506,46},{710,45,812,46},{335,45,428,46},{588,45,681,46},{212,45,305,46},{211,46,307,47},{586,46,682,47},{333,46,429,47},{709,46,812,47},{456,46,507,47},{0,43,49,48},{72,45,123,48},{210,47,308,48},{332,47,430,48},{455,47,507,48},{585,47,683,48},{708,47,812,48},{209,48,309,49},{584,48,684,49},{331,48,431,49},{707,48,813,49},{454,48,509,49},{330,49,432,50},{448,49,522,50},{706,49,813,50},{583,49,685,50},{551,49,555,50},{208,49,310,50},{71,48,123,51},{207,50,310,51},{705,50,813,51},{330,50,433,51},{447,50,564,51},{582,50,686,51},{145,46,194,52},{329,51,434,52},{446,51,566,52},{582,51,687,52},{206,51,311,52},{0,48,50,53},{704,51,813,53},{71,51,124,53},{206,52,312,53},{581,52,687,53},{328,52,434,53},{445,52,566,54},{328,53,435,54},{1,53,50,54},{581,53,688,54},{205,53,312,54},{703,53,813,55},{580,54,688,55},{205,54,313,55},{327,54,435,56},{1,54,51,56},{702,55,813,56},{580,55,689,56},{204,55,313,57},{327,56,436,57},{70,53,124,58},{144,52,193,59},{204,57,314,59},{2,56,51,60},{144,59,192,60},{70,58,125,62},{702,56,812,65},{3,60,52,65},{143,60,192,65},{69,62,125,65},{143,65,191,66},{4,65,52,67},{69,65,126,68},{579,56,689,69},{702,65,813,70},{142,66,191,70},{4,67,53,72},{68,68,126,72},{142,70,190,72},{702,70,814,72},{5,72,53,74},{68,72,127,75},{141,72,190,77},{326,57,436,78},{203,59,314,78},{579,69,690,78},{67,75,127,78},{5,74,54,79},{141,77,189,79},{579,78,631,79},{203,78,256,79},{326,78,378,79},{384,78,436,79},{637,78,690,79},{261,78,314,79},{579,79,630,80},{263,79,314,80},{385,79,436,80},{638,79,690,80},{326,79,377,80},{702,72,815,81},{203,79,254,81},{6,79,54,81},{639,80,690,81},{386,80,436,81},{444,54,567,82},{140,79,189,82},{579,80,629,82},{702,81,756,82},{203,81,253,82},{640,81,690,82},{759,81,815,82},{67,78,128,83},{264,80,314,83},{326,80,376,83},{702,82,755,83},{760,82,815,83},{204,82,253,83},{387,81,436,84},{702,83,754,84},{6,81,55,85},{445,82,566,85},{66,83,128,85},{204,83,252,85},{388,84,435,85},{140,82,188,86},{205,85,251,86},{446,85,565,86},{389,85,435,86},{761,83,815,87},{702,84,753,87},{7,85,55,87},{207,86,249,87},{448,86,563,87},{390,86,433,87},{452,87,510,88},{139,86,188,89},{455,88,508,89},{66,85,129,90},{761,87,814,90},{456,89,507,90},{265,83,314,91},{702,87,752,91},{579,82,628,92},{326,83,375,92},{7,87,56,92},{456,90,506,92},{640,82,689,93},{139,89,187,93},{65,90,129,93},{761,90,813,93},{264,91,314,94},{579,92,629,94},{326,92,376,94},{8,92,56,95},{138,93,187,95},{639,93,689,95},{579,94,630,95},{263,94,314,95},{326,94,377,95},{65,93,130,96},{579,95,631,96},{262,95,314,96},{326,95,378,96},{8,95,57,96},{637,95,689,96},{556,96,561,97},{326,96,381,97},{229,96,233,97},{244,96,314,97},{326,97,419,98},{520,97,564,98},{221,97,314,98},{138,95,186,99},{519,98,566,99},{326,98,422,99},{218,98,314,99},{326,99,424,100},{216,99,314,100},{64,96,130,101},{9,96,57,101},{137,99,186,101},{518,99,566,101},{214,100,314,101},{326,100,426,101},{9,101,58,102},{326,101,427,102},{213,101,314,102},{211,102,314,103},{326,102,428,103},{64,101,131,104},{137,101,185,104},{326,103,430,104},{210,103,314,104},{209,104,314,105},{63,104,131,106},{326,104,431,106},{208,105,314,106},{136,104,185,107},{326,106,432,107},{10,102,58,108},{207,106,314,108},{326,107,433,108},{136,107,184,108},{63,106,132,109},{10,108,59,109},{206,108,314,109},{326,108,434,110},{135,108,184,110},{63,109,133,110},{11,109,59,111},{62,110,184,111},{205,109,314,112},{61,111,184,112},{11,111,60,112},{326,110,435,113},{11,112,184,113},{579,96,689,116},{11,113,183,116},{204,112,314,117},{326,113,436,118},{12,116,183,119},{762,93,813,121},{327,118,436,121},{328,121,436,122},{12,119,182,123},{329,122,436,124},{579,116,690,125},{13,123,182,125},{330,124,436,125},{331,125,436,126},{762,121,812,127},{332,126,436,127},{13,125,181,128},{333,127,436,128},{98,128,181,129},{334,128,436,129},{13,128,96,129},{336,129,436,130},{579,125,689,131},{99,129,181,131},{337,130,436,131},{14,129,95,132},{339,131,436,132},{579,131,688,133},{342,132,436,133},{203,117,314,134},{14,132,94,134},{579,133,686,134},{347,133,436,134},{203,134,257,135},{384,134,436,135},{260,134,314,135},{579,134,632,135},{579,135,630,136},{262,135,314,136},{385,135,436,136},{203,135,255,136},{100,131,180,137},{203,136,254,137},{263,136,314,137},{579,136,629,138},{386,136,436,138},{101,137,180,138},{15,134,94,139},{15,139,93,140},{101,138,179,142},{102,142,179,143},{330,143,371,144},{644,143,686,144},{16,140,93,145},{328,144,373,145},{642,144,687,145},{641,145,688,146},{327,145,374,146},{16,145,92,146},{518,101,567,148},{763,127,812,148},{102,143,178,148},{579,138,628,149},{387,138,436,149},{640,146,689,149},{326,146,375,149},{103,148,178,149},{702,91,751,150},{457,92,506,150},{203,137,253,150},{264,137,314,150},{762,148,812,150},{639,149,689,150},{17,146,92,151},{517,148,567,151},{579,149,629,151},{386,149,436,151},{326,149,376,151},{702,150,752,151},{639,150,690,151},{457,150,507,151},{761,150,812,151},{203,150,254,152},{263,150,314,152},{702,151,753,152},{457,151,508,152},{579,151,630,152},{760,151,812,152},{638,151,690,152},{326,151,377,152},{385,151,436,152},{516,151,567,152},{17,151,91,153},{326,152,379,153},{636,152,690,153},{702,152,755,153},{203,152,256,153},{383,152,436,153},{513,152,567,153},{457,152,510,153},{758,152,812,153},{579,152,632,153},{261,152,314,153},{103,149,177,154},{103,154,176,155},{18,153,91,157},{18,157,90,159},{104,155,176,161},{19,159,90,162},{19,162,89,165},{105,161,175,167},{20,165,89,168},{106,167,175,168},{203,153,314,169},{579,153,690,171},{20,168,88,171},{457,153,567,173},{106,168,174,173},{326,153,436,174},{579,171,689,174},{702,153,812,175},{204,169,314,175},{21,171,88,175},{107,173,174,175},{457,173,566,175},{580,174,689,175},{327,174,436,175},{327,175,435,177},{580,175,688,177},{458,175,566,177},{21,175,87,178},{205,175,314,178},{703,175,812,178},{328,177,435,178},{458,177,565,178},{107,175,173,179},{581,177,687,179},{459,178,565,179},{328,178,434,179},{704,178,812,179},{206,178,314,179},{108,179,173,180},{329,179,433,180},{460,179,564,180},{582,179,686,180},{22,178,87,181},{705,179,812,181},{207,179,314,181},{460,180,563,181},{330,180,433,181},{583,180,686,181},{330,181,432,182},{583,181,685,182},{461,181,562,182},{208,181,314,182},{706,181,812,182},{707,182,812,183},{584,182,684,183},{331,182,431,183},{462,182,562,183},{209,182,314,183},{108,180,172,184},{22,181,86,184},{463,183,561,184},{586,183,683,184},{332,183,430,184},{210,183,314,184},{708,183,812,184},{587,184,682,185},{709,184,812,185},{464,184,559,185},{109,184,172,185},{334,184,429,185},{211,184,314,185},{23,184,86,186},{711,185,811,186},{213,185,314,186},{466,185,558,186},{335,185,427,186},{588,185,680,186},{109,185,171,187},{214,186,314,187},{590,186,679,187},{467,186,556,187},{712,186,811,187},{23,186,85,187},{337,186,426,187},{216,187,313,188},{469,187,554,188},{714,187,811,188},{591,187,677,188},{338,187,424,188},{110,187,171,188},{24,187,85,188},{25,188,84,189},{341,188,422,189},{717,188,810,189},{593,188,675,189},{471,188,552,189},{218,188,312,189},{111,188,170,189},{721,189,808,190},{112,189,168,190},{475,189,549,190},{344,189,418,190},{597,189,671,190},{221,189,311,190},{26,189,82,190},{754,190,779,191},{790,190,799,191},{134,190,138,191},{741,190,742,191},{744,190,749,191},{490,190,491,191},{493,190,497,191},{761,191,775,192}};
 
 static void (*g_DrawRectD)(const float*, const uint8_t*) = nullptr; static int (*g_OSW)() = nullptr; static int (*g_OSH)() = nullptr;
-static long long g_DeadSince = 0, g_AliveSince = 0; static float g_DeathFade = 0.f;
+static long long g_DeadSince = 0, g_AliveSince = 0; static bool g_SndStarted = false; static float g_DeathFade = 0.f;
 static float DFrand(uint32_t& s2) { s2 = s2 * 1664525u + 1013904223u; return (float)((s2 >> 8) & 0xFFFF) / 65535.f; }
 static void DrawDeathScreen()
 {
@@ -523,25 +524,39 @@ static void DrawDeathScreen()
     void* pl = g_FindPlayer(0); if (!pl) return;
     long long now = NowMs();
     bool dead = !g_IsAlive(pl);
-    if (dead) { if (!g_DeadSince) { g_DeadSince = now; if (g_Log2) LOGI("player died: death screen on"); MuteWorld(); PlayDeathSound(); } g_AliveSince = 0; }
+    if (dead) { if (!g_DeadSince) { g_DeadSince = now; if (g_Log2) LOGI("player died: death screen on"); MuteWorld(); g_SndStarted = false; } g_AliveSince = 0; }
     else { if (g_DeadSince && !g_AliveSince) g_AliveSince = now; }
     if (!g_DeadSince) return;
     float t = (now - g_DeadSince) / 1000.f;
     SlowMo(dead, t);
+    if (dead && !g_SndStarted && t >= g_GreyTime) { g_SndStarted = true; PlayDeathSound(); }   // the sound starts with the red 'wasted' screen
     float target = dead ? 1.f : 0.f;
     g_DeathFade += (target - g_DeathFade) * (dead ? 0.06f : 0.18f);
     if (!dead && g_DeathFade < 0.02f) { g_DeadSince = 0; g_DeathFade = 0.f; UnmuteWorld(); SlowMo(false, 0.f); return; }
     float W = (float)g_OSW(), H = (float)g_OSH(), k = H / 1080.f;
     float f = g_DeathFade, pulse = 0.92f + 0.08f * sinf(t * 5.f);
+    float rf = fminf(1.f, fmaxf(0.f, (t - g_GreyTime) / 0.6f)), t2 = fmaxf(0.f, t - g_GreyTime);   // rf: red screen amount, t2: time since it started
+    float fr = f * rf, fg = f * fminf(1.f, t / 0.7f) * (1.f - rf);                                  // fg: grey screen amount
     auto rect = [&](float l, float b, float r, float tp, uint8_t cr, uint8_t cg, uint8_t cb, float a) { float rc[4] = { l, b, r, tp }; uint8_t c[4] = { cr, cg, cb, (uint8_t)fminf(255.f, fmaxf(0.f, a)) }; g_DrawRectD(rc, c); };
+    // grey screen right after death: desaturated, darker, with dark edges
+    if (fg > 0.001f)
+    {
+        rect(0, H, W, 0, 112, 106, 108, 165.f * fg);
+        rect(0, H, W, 0, 0, 0, 0, 55.f * fg);
+        for (int i = 0; i < 18; ++i)
+        {
+            float bw = (0.015f + 0.017f * i) * W * 0.5f, bh = (0.015f + 0.017f * i) * H * 0.5f, a = 22.f * fg;
+            rect(0, H, bw, 0, 28, 6, 8, a); rect(W - bw, H, W, 0, 28, 6, 8, a); rect(0, bh, W, 0, 28, 6, 8, a); rect(0, H, W, H - bh, 28, 6, 8, a);
+        }
+    }
     // base: dark red wash
-    rect(0, H, W, 0, 0, 0, 0, 150.f * f);                                   // darken the scene
-    rect(0, H, W, 0, 140, 0, 12, g_DeathAlpha * 0.72f * f * pulse);        // deep red tint
-    for (int i = 0; i < 12; ++i) rect(0, H, W, H * (0.45f + 0.045f * i), 0, 0, 0, 12.f * f);   // darker toward the bottom
+    rect(0, H, W, 0, 0, 0, 0, 150.f * fr);                                   // darken the scene
+    rect(0, H, W, 0, 140, 0, 12, g_DeathAlpha * 0.72f * fr * pulse);        // deep red tint
+    for (int i = 0; i < 12; ++i) rect(0, H, W, H * (0.45f + 0.045f * i), 0, 0, 0, 12.f * fr);   // darker toward the bottom
     // vignette: darker bands that thicken toward the edges
     for (int i = 0; i < 18; ++i)
     {
-        float bw = (0.015f + 0.015f * i) * W * 0.5f, bh = (0.015f + 0.015f * i) * H * 0.5f, a = 24.f * f;
+        float bw = (0.015f + 0.015f * i) * W * 0.5f, bh = (0.015f + 0.015f * i) * H * 0.5f, a = 24.f * fr;
         rect(0, H, bw, 0, 25, 0, 2, a); rect(W - bw, H, W, 0, 25, 0, 2, a); rect(0, bh, W, 0, 25, 0, 2, a); rect(0, H, W, H - bh, 25, 0, 2, a);
     }
     // a disc drawn as horizontal strips (the game only draws axis-aligned rectangles)
@@ -568,12 +583,12 @@ static void DrawDeathScreen()
     }
     // when the sound ends: black screen, the word turns red
     float tb = g_BlackAt > 0.f ? g_BlackAt : (g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f);
-    float bf = fminf(1.f, fmaxf(0.f, (t - tb) / 0.35f)) * f;
+    float bf = fminf(1.f, fmaxf(0.f, (t2 - tb) / 0.35f)) * f;
     if (bf > 0.f) rect(0, H, W, 0, 0, 0, 0, 255.f * bf);
     // the word 'wasted': white, big, slightly zooming in, with a dark shadow
     {
-        float tf = fminf(1.f, t / 0.45f); tf = 1.f - (1.f - tf) * (1.f - tf);
-        float ta = 255.f * f * tf, zoom = 1.18f - 0.18f * tf;
+        float tf = fminf(1.f, t2 / 0.45f); tf = 1.f - (1.f - tf) * (1.f - tf);
+        float ta = 255.f * fr * tf, zoom = 1.18f - 0.18f * tf;
         float tw = W * 0.27f * zoom, sc = tw / kWastedW, th = kWastedH * sc;
         float ox = (W - tw) * 0.5f, oy = H * 0.5f - th * 0.5f;
         for (int pass = 1; pass < 2; ++pass)   // (pass 0 was a soft shadow: dropped, the edges are cleaner without it)
