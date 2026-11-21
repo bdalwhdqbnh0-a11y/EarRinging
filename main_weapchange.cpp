@@ -283,7 +283,7 @@ static void PedRender_hook(void* ped)
 
 // ---------------------------------------------------------------- settings (WeaponChange.ini - weapon change animation)
 static int   g_ChEnabled = 1, g_Flags = 0x14;
-static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static float g_DeathVol = 1.0f;
+static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 2.0f;
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
@@ -295,7 +295,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (1.0 = normal)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (1.0 = normal)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=2.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -314,8 +314,10 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "FadeRate")) g_FadeRate = fmaxf(1.f, (float)atof(v));
         else if (!strcasecmp(k, "DeathScreen")) g_DeathScreen = atoi(v);
         else if (!strcasecmp(k, "DeathSound")) g_DeathSound = atoi(v);
+        else if (!strcasecmp(k, "DeathSlowMo")) g_DeathSlow = atoi(v);
+        else if (!strcasecmp(k, "DeathSlowScale")) g_SlowScale = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
         else if (!strcasecmp(k, "MuteWorldOnDeath")) g_MuteWorld = atoi(v);
-        else if (!strcasecmp(k, "DeathSoundVolume")) g_DeathVol = fminf(4.f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "DeathSoundVolume")) g_DeathVol = fminf(8.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "DeathAlpha")) g_DeathAlpha = fminf(255.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "SwapAt")) g_SwapAt = fminf(0.95f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "AnimFlags")) g_Flags = (int)strtol(v, nullptr, 0);
@@ -453,6 +455,7 @@ static bool LoadWav()
     alSourcei_(g_SndSrc, 0x1009, (int)g_SndBuf);          // AL_BUFFER
     alSourcei_(g_SndSrc, 0x202, 1);                       // AL_SOURCE_RELATIVE: heard from the listener, not from a place in the world
     alSourcei_(g_SndSrc, 0x1007, 0);                      // not looping
+    if (alSourcef_) { alSourcef_(g_SndSrc, 0x100E, 16.f); alSourcef_(g_SndSrc, 0x100D, 0.f); }   // AL_MAX_GAIN raised so a gain above 1 is really louder
     int err = alGetError_();
     LOGI("wasted.wav loaded: %d ch %d Hz %u bytes, buffer %u source %u, al error 0x%x", ch, rate, pcmLen, g_SndBuf, g_SndSrc, err);
     return err == 0;
@@ -489,6 +492,19 @@ static void UnmuteWorld()
     if (g_Log2) LOGI("world sound restored");
 }
 
+static float* g_TimeScaleD = nullptr; static float g_SavedScale = 1.f; static bool g_SlowOn = false;
+static void SlowMo(bool dead, float t)
+{
+    if (!g_DeathSlow || !g_TimeScaleD) return;
+    if (dead)
+    {
+        if (!g_SlowOn) { g_SavedScale = *g_TimeScaleD; if (!(g_SavedScale > 0.05f && g_SavedScale <= 1.5f)) g_SavedScale = 1.f; g_SlowOn = true; if (g_Log2) LOGI("slow motion on (was %.2f)", g_SavedScale); }
+        float u = fminf(1.f, t / 0.5f);
+        *g_TimeScaleD = 1.f + (g_SlowScale - 1.f) * u;
+    }
+    else if (g_SlowOn) { *g_TimeScaleD = g_SavedScale; g_SlowOn = false; if (g_Log2) LOGI("slow motion off"); }
+}
+
 // ---------------------------------------------------------------- death screen (red 'wasted' look)
 // the word 'wasted' as merged rectangles (traced from the GTA 'wasted' logo): x0, y0, x1, y1 in a kWastedW x kWastedH grid
 static const int kWastedW = 357, kWastedH = 84, kWastedN = 197;
@@ -507,9 +523,10 @@ static void DrawDeathScreen()
     else { if (g_DeadSince && !g_AliveSince) g_AliveSince = now; }
     if (!g_DeadSince) return;
     float t = (now - g_DeadSince) / 1000.f;
+    SlowMo(dead, t);
     float target = dead ? 1.f : 0.f;
     g_DeathFade += (target - g_DeathFade) * (dead ? 0.06f : 0.18f);
-    if (!dead && g_DeathFade < 0.02f) { g_DeadSince = 0; g_DeathFade = 0.f; UnmuteWorld(); return; }
+    if (!dead && g_DeathFade < 0.02f) { g_DeadSince = 0; g_DeathFade = 0.f; UnmuteWorld(); SlowMo(false, 0.f); return; }
     float W = (float)g_OSW(), H = (float)g_OSH(), k = H / 1080.f;
     float f = g_DeathFade, pulse = 0.92f + 0.08f * sinf(t * 5.f);
     auto rect = [&](float l, float b, float r, float tp, uint8_t cr, uint8_t cg, uint8_t cb, float a) { float rc[4] = { l, b, r, tp }; uint8_t c[4] = { cr, cg, cb, (uint8_t)fminf(255.f, fmaxf(0.f, a)) }; g_DrawRectD(rc, c); };
@@ -602,6 +619,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     LOGI("change symbols: reg=%p load=%p open=%p close=%p block=%p anim=%p blend=%p control=%p cut=%p/%p", (void*)g_RegBlock, (void*)g_LoadAnim, (void*)g_StreamOpen, (void*)g_StreamClose, (void*)g_GetBlock, (void*)g_GetAnim, (void*)g_Blend, (void*)g_InControl, g_CutRunning, g_CutProc);
     *(void**)&g_DrawRectD = (void*)ResolveExact("_ZN9CSprite2d8DrawRectERK5CRectRK5CRGBA");
     *(void**)&g_OSW = (void*)ResolveExact("_Z17OS_ScreenGetWidthv"); *(void**)&g_OSH = (void*)ResolveExact("_Z18OS_ScreenGetHeightv");
+    g_TimeScaleD = (float*)ResolveExact("_ZN6CTimer13ms_fTimeScaleE");
     g_AEHw = (uint8_t*)ResolveExact("AEAudioHardware"); *(void**)&g_Rescale = (void*)ResolveExact("_ZN16CAEAudioHardware21RescaleChannelVolumesEv");
     LOGI("audio hardware=%p rescale=%p", g_AEHw, (void*)g_Rescale);
     *(void**)&alGenBuffers_ = (void*)ResolveExact("alGenBuffers"); *(void**)&alGenSources_ = (void*)ResolveExact("alGenSources");
