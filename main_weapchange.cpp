@@ -565,7 +565,7 @@ static bool GlInit()
     const char* vs = "attribute vec2 aPos; attribute vec2 aUV; varying vec2 vUV; void main() { vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }";
     const char* fs =
         "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n"
-        "varying vec2 vUV; uniform sampler2D uTex; uniform float uAmt; uniform float uContrast; uniform float uBright; uniform vec3 uShadow; uniform float uVig;\n"
+        "varying vec2 vUV; uniform sampler2D uTex; uniform float uAmt; uniform float uContrast; uniform float uBright; uniform vec3 uShadow; uniform float uVig; uniform float uDiag;\n"
         "void main() {\n"
         "  vec3 c = texture2D(uTex, vUV).rgb;\n"
         "  float l = dot(c, vec3(0.299, 0.587, 0.114));\n"
@@ -573,7 +573,7 @@ static bool GlInit()
         "  vec3 gr = vec3(g) * vec3(1.0, 0.94, 0.96) + uShadow * (1.0 - g);\n"
         "  float d = length(vUV - vec2(0.5)) * 1.4142;\n"
         "  gr *= 1.0 - uVig * smoothstep(0.35, 1.0, d);\n"
-        "  gl_FragColor = vec4(mix(c, gr, uAmt), 1.0);\n"
+        "  gl_FragColor = vec4(mix(c, uDiag > 0.5 ? vec3(1.0, 0.0, 1.0) : gr, uAmt), 1.0);\n"
         "}\n";
     GLuint v = GlCompile(0x8B31, vs), f = GlCompile(0x8B30, fs); if (!v || !f) return false;
     g_GlProg = p_glCreateProgram(); p_glAttachShader(g_GlProg, v); p_glAttachShader(g_GlProg, f);
@@ -587,6 +587,8 @@ static bool GlInit()
     return true;
 }
 
+static volatile long long g_ShaderLastMs = 0; static volatile int g_ShaderFrames = 0;
+static long long ClockMs() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000; }
 // returns true when the grey look was drawn with the shader
 static bool GreyGL(float amt, bool blue)
 {
@@ -621,7 +623,7 @@ static bool GreyGL(float amt, bool blue)
     p_glUseProgram(g_GlProg);
     p_glUniform1i(g_GlU[0], 0); p_glUniform1f(g_GlU[1], amt); p_glUniform1f(g_GlU[2], g_GreyContrast); p_glUniform1f(g_GlU[3], g_GreyBright);
     if (blue) p_glUniform3f(g_GlU[4], 0.015f, 0.03f, 0.07f); else p_glUniform3f(g_GlU[4], 0.075f, 0.012f, 0.02f);
-    p_glUniform1f(g_GlU[5], g_GreyVig);
+    p_glUniform1f(g_GlU[5], g_GreyVig); { GLint ud = p_glGetUniformLocation(g_GlProg, "uDiag"); if (ud >= 0) p_glUniform1f(ud, g_GreyShader == 2 ? 1.f : 0.f); }
     p_glDrawArrays(0x0005, 0, 4);
     GLenum err = p_glGetError();
     // ---- put everything back
@@ -638,6 +640,7 @@ static bool GreyGL(float amt, bool blue)
     p_glBlendFuncSeparate(bSrcC, bDstC, bSrcA, bDstA); p_glColorMask(cm[0], cm[1], cm[2], cm[3]);
     if (err) { g_GlFailed = true; LOGE("grey shader gl error 0x%x: switched off", err); return false; }
     static bool once = false; if (!once) { once = true; LOGI("grey shader drew a frame (viewport %d x %d)", vp[2], vp[3]); }
+    g_ShaderLastMs = ClockMs(); int n = ++g_ShaderFrames; if (n == 1 || n % 30 == 0) LOGI("grey pass frame %d, amount %.2f, fbo/viewport %d,%d %dx%d", n, amt, vp[0], vp[1], vp[2], vp[3]);
     return true;
 }
 
@@ -696,7 +699,8 @@ static void DrawDeathScreen()
     {
         // real desaturation through a shader; if that is not available (or the GL driver complains) the plain overlay below is used
         g_GreyReqBlue = (g_Mode == 2); g_GreyReqAmt = fg;     // drawn by Swap_hook on the render thread
-        if (!(g_GreyShader && !g_GlFailed))                     // shader not available: plain overlay instead
+        g_ShaderFrames = 0;
+        if (!(g_GreyShader && !g_GlFailed && ClockMs() - g_ShaderLastMs < 300))   // shader not drawing (unavailable, failed or not reached the screen): plain overlay instead
         {
         // dark, almost colourless look with a slight warm maroon cast (like the reference picture): darken first, then lay a dark grey over it
         rect(0, H, W, 0, 0, 0, 0, 95.f * fg);
