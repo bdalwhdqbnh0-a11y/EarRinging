@@ -11,6 +11,7 @@
 
 #include <android/log.h>
 #include <dlfcn.h>
+#include <dlfcn.h>
 #include <elf.h>
 #include <link.h>
 #include <fcntl.h>
@@ -283,7 +284,7 @@ static void PedRender_hook(void* ped)
 
 // ---------------------------------------------------------------- settings (WeaponChange.ini - weapon change animation)
 static int   g_ChEnabled = 1, g_Flags = 0x14;
-static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static float g_BlackAt = 0.f; static float g_GreyStrength = 205.f; static float g_GreyTime = 1.5f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f; static int g_BustedScreen = 1; static int g_BustedSound = 1; static float g_BustedBlackAt = 3.5f;   // busted: seconds after the blue screen starts when the black screen appears
+static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static int g_GreyShader = 1; static float g_GreyContrast = 1.5f, g_GreyBright = 0.8f, g_GreyVig = 0.4f; static float g_BlackAt = 0.f; static float g_GreyStrength = 205.f; static float g_GreyTime = 1.5f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f; static int g_BustedScreen = 1; static int g_BustedSound = 1; static float g_BustedBlackAt = 3.5f;   // busted: seconds after the blue screen starts when the black screen appears
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
@@ -295,7 +296,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; 1 = real grey look through a shader (desaturated, contrasty, maroon shadows); 0 = plain overlay only\nGreyShader=1\nGreyContrast=1.5\nGreyBright=0.8\n; soft dark edges of the grey screen (0 = none, 1 = strong); smooth, not rectangular\nGreyVignette=0.4\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -319,6 +320,10 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "BustedSound")) g_BustedSound = atoi(v);
         else if (!strcasecmp(k, "DeathSlowMo")) g_DeathSlow = atoi(v);
         else if (!strcasecmp(k, "DeathSlowScale")) g_SlowScale = fminf(1.f, fmaxf(0.02f, (float)atof(v)));
+        else if (!strcasecmp(k, "GreyShader")) g_GreyShader = atoi(v);
+        else if (!strcasecmp(k, "GreyContrast")) g_GreyContrast = fminf(3.f, fmaxf(0.5f, (float)atof(v)));
+        else if (!strcasecmp(k, "GreyBright")) g_GreyBright = fminf(2.f, fmaxf(0.2f, (float)atof(v)));
+        else if (!strcasecmp(k, "GreyVignette")) g_GreyVig = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "GreyStrength")) g_GreyStrength = fminf(255.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "GreyScreenTime")) g_GreyTime = fminf(10.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "BlackScreenAt")) g_BlackAt = fmaxf(0.f, (float)atof(v));
@@ -516,6 +521,125 @@ static void SlowMo(bool dead, float t, float tbl)
     else if (g_SlowOn) { *g_TimeScaleD = g_SavedScale; g_SlowOn = false; if (g_Log2) LOGI("slow motion off"); }
 }
 
+// ---------------------------------------------------------------- real grey look: copy the finished frame into a texture and redraw it through a small GLES2 shader
+// (desaturate + contrast + dark maroon shadows). The game's GL state is saved first and restored exactly afterwards; any GL error switches this off and the
+// plain overlay (rectangles) is used instead.
+typedef unsigned int GLuint; typedef int GLint; typedef unsigned int GLenum; typedef int GLsizei; typedef float GLfloat; typedef unsigned char GLboolean; typedef char GLchar;
+#define GLF(ret, name, args) static ret (*p_##name) args = nullptr;
+GLF(void, glGetIntegerv, (GLenum, GLint*)) GLF(void, glGetBooleanv, (GLenum, GLboolean*)) GLF(GLboolean, glIsEnabled, (GLenum)) GLF(void, glEnable, (GLenum)) GLF(void, glDisable, (GLenum))
+GLF(void, glActiveTexture, (GLenum)) GLF(void, glBindTexture, (GLenum, GLuint)) GLF(void, glGenTextures, (GLsizei, GLuint*)) GLF(void, glTexParameteri, (GLenum, GLenum, GLint))
+GLF(void, glCopyTexImage2D, (GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint)) GLF(void, glCopyTexSubImage2D, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei))
+GLF(GLuint, glCreateShader, (GLenum)) GLF(void, glShaderSource, (GLuint, GLsizei, const GLchar* const*, const GLint*)) GLF(void, glCompileShader, (GLuint)) GLF(void, glGetShaderiv, (GLuint, GLenum, GLint*))
+GLF(void, glGetShaderInfoLog, (GLuint, GLsizei, GLsizei*, GLchar*)) GLF(GLuint, glCreateProgram, ()) GLF(void, glAttachShader, (GLuint, GLuint)) GLF(void, glBindAttribLocation, (GLuint, GLuint, const GLchar*))
+GLF(void, glLinkProgram, (GLuint)) GLF(void, glGetProgramiv, (GLuint, GLenum, GLint*)) GLF(void, glGetProgramInfoLog, (GLuint, GLsizei, GLsizei*, GLchar*)) GLF(void, glUseProgram, (GLuint))
+GLF(GLint, glGetUniformLocation, (GLuint, const GLchar*)) GLF(void, glUniform1i, (GLint, GLint)) GLF(void, glUniform1f, (GLint, GLfloat)) GLF(void, glUniform3f, (GLint, GLfloat, GLfloat, GLfloat))
+GLF(void, glGenBuffers, (GLsizei, GLuint*)) GLF(void, glBindBuffer, (GLenum, GLuint)) GLF(void, glBufferData, (GLenum, long, const void*, GLenum))
+GLF(void, glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, const void*)) GLF(void, glEnableVertexAttribArray, (GLuint)) GLF(void, glDisableVertexAttribArray, (GLuint))
+GLF(void, glGetVertexAttribiv, (GLuint, GLenum, GLint*)) GLF(void, glGetVertexAttribPointerv, (GLuint, GLenum, void**)) GLF(void, glDrawArrays, (GLenum, GLint, GLsizei))
+GLF(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean)) GLF(void, glBlendFuncSeparate, (GLenum, GLenum, GLenum, GLenum)) GLF(GLenum, glGetError, ())
+
+static bool g_GlInit = false, g_GlFailed = false, g_GlData = false;
+static GLuint g_GlProg = 0, g_GlTex = 0, g_GlVbo = 0; static GLint g_GlU[6]; static int g_GlTexW = 0, g_GlTexH = 0;
+
+static GLuint GlCompile(GLenum type, const char* src)
+{
+    GLuint sh = p_glCreateShader(type); p_glShaderSource(sh, 1, &src, nullptr); p_glCompileShader(sh);
+    GLint ok = 0; p_glGetShaderiv(sh, 0x8B81, &ok);
+    if (!ok) { char log[512] = { 0 }; p_glGetShaderInfoLog(sh, 511, nullptr, log); LOGE("grey shader compile failed: %s", log); return 0; }
+    return sh;
+}
+static bool GlInit()
+{
+    void* h = dlopen("libGLESv2.so", RTLD_NOW | RTLD_NOLOAD); if (!h) h = dlopen("libGLESv2.so", RTLD_NOW);
+    if (!h) { LOGE("libGLESv2 not found"); return false; }
+    bool ok = true;
+#define GLL(n) *(void**)&p_##n = dlsym(h, #n); if (!p_##n) { LOGE("missing GL function " #n); ok = false; }
+    GLL(glGetIntegerv) GLL(glGetBooleanv) GLL(glIsEnabled) GLL(glEnable) GLL(glDisable) GLL(glActiveTexture) GLL(glBindTexture) GLL(glGenTextures) GLL(glTexParameteri) GLL(glCopyTexImage2D) GLL(glCopyTexSubImage2D)
+    GLL(glCreateShader) GLL(glShaderSource) GLL(glCompileShader) GLL(glGetShaderiv) GLL(glGetShaderInfoLog) GLL(glCreateProgram) GLL(glAttachShader) GLL(glBindAttribLocation) GLL(glLinkProgram) GLL(glGetProgramiv)
+    GLL(glGetProgramInfoLog) GLL(glUseProgram) GLL(glGetUniformLocation) GLL(glUniform1i) GLL(glUniform1f) GLL(glUniform3f) GLL(glGenBuffers) GLL(glBindBuffer) GLL(glBufferData) GLL(glVertexAttribPointer)
+    GLL(glEnableVertexAttribArray) GLL(glDisableVertexAttribArray) GLL(glGetVertexAttribiv) GLL(glGetVertexAttribPointerv) GLL(glDrawArrays) GLL(glColorMask) GLL(glBlendFuncSeparate) GLL(glGetError)
+#undef GLL
+    if (!ok) return false;
+    p_glGetError();
+    const char* vs = "attribute vec2 aPos; attribute vec2 aUV; varying vec2 vUV; void main() { vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }";
+    const char* fs =
+        "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n"
+        "varying vec2 vUV; uniform sampler2D uTex; uniform float uAmt; uniform float uContrast; uniform float uBright; uniform vec3 uShadow; uniform float uVig;\n"
+        "void main() {\n"
+        "  vec3 c = texture2D(uTex, vUV).rgb;\n"
+        "  float l = dot(c, vec3(0.299, 0.587, 0.114));\n"
+        "  float g = pow(max(l, 0.0001), uContrast) * uBright;\n"
+        "  vec3 gr = vec3(g) * vec3(1.0, 0.94, 0.96) + uShadow * (1.0 - g);\n"
+        "  float d = length(vUV - vec2(0.5)) * 1.4142;\n"
+        "  gr *= 1.0 - uVig * smoothstep(0.35, 1.0, d);\n"
+        "  gl_FragColor = vec4(mix(c, gr, uAmt), 1.0);\n"
+        "}\n";
+    GLuint v = GlCompile(0x8B31, vs), f = GlCompile(0x8B30, fs); if (!v || !f) return false;
+    g_GlProg = p_glCreateProgram(); p_glAttachShader(g_GlProg, v); p_glAttachShader(g_GlProg, f);
+    p_glBindAttribLocation(g_GlProg, 0, "aPos"); p_glBindAttribLocation(g_GlProg, 1, "aUV"); p_glLinkProgram(g_GlProg);
+    GLint lk = 0; p_glGetProgramiv(g_GlProg, 0x8B82, &lk);
+    if (!lk) { char log[512] = { 0 }; p_glGetProgramInfoLog(g_GlProg, 511, nullptr, log); LOGE("grey shader link failed: %s", log); return false; }
+    g_GlU[0] = p_glGetUniformLocation(g_GlProg, "uTex"); g_GlU[1] = p_glGetUniformLocation(g_GlProg, "uAmt"); g_GlU[2] = p_glGetUniformLocation(g_GlProg, "uContrast");
+    g_GlU[3] = p_glGetUniformLocation(g_GlProg, "uBright"); g_GlU[4] = p_glGetUniformLocation(g_GlProg, "uShadow"); g_GlU[5] = p_glGetUniformLocation(g_GlProg, "uVig");
+    p_glGenTextures(1, &g_GlTex); p_glGenBuffers(1, &g_GlVbo);
+    LOGI("grey shader ready: program %u texture %u vbo %u uniforms %d %d %d %d %d %d, gl error 0x%x", g_GlProg, g_GlTex, g_GlVbo, g_GlU[0], g_GlU[1], g_GlU[2], g_GlU[3], g_GlU[4], g_GlU[5], p_glGetError());
+    return true;
+}
+
+// returns true when the grey look was drawn with the shader
+static bool GreyGL(float amt, bool blue)
+{
+    if (!g_GreyShader || g_GlFailed) return false;
+    if (!g_GlInit) { g_GlInit = true; if (!GlInit()) { g_GlFailed = true; LOGE("grey shader off, using the plain overlay"); return false; } }
+    if (!g_GlProg) return false;
+    GLint vp[4]; p_glGetIntegerv(0x0BA2, vp); if (vp[2] < 16 || vp[3] < 16) return false;
+    p_glGetError();
+    // ---- save the game's state
+    GLint prog, actTex, tex0, arrBuf, bSrcC, bDstC, bSrcA, bDstA; GLboolean cm[4];
+    p_glGetIntegerv(0x8B8D, &prog); p_glGetIntegerv(0x84E0, &actTex); p_glGetIntegerv(0x8894, &arrBuf);
+    p_glGetIntegerv(0x80C9, &bSrcC); p_glGetIntegerv(0x80C8, &bDstC); p_glGetIntegerv(0x80CB, &bSrcA); p_glGetIntegerv(0x80CA, &bDstA); p_glGetBooleanv(0x0C23, cm);
+    p_glActiveTexture(0x84C0); p_glGetIntegerv(0x8069, &tex0);
+    GLboolean eBlend = p_glIsEnabled(0x0BE2), eDepth = p_glIsEnabled(0x0B71), eCull = p_glIsEnabled(0x0B44), eScis = p_glIsEnabled(0x0C11), eSten = p_glIsEnabled(0x0B90);
+    struct Att { GLint en, size, type, norm, stride, buf; void* ptr; } at[2];
+    for (int i = 0; i < 2; ++i)
+    {
+        p_glGetVertexAttribiv(i, 0x8622, &at[i].en); p_glGetVertexAttribiv(i, 0x8623, &at[i].size); p_glGetVertexAttribiv(i, 0x8625, &at[i].type); p_glGetVertexAttribiv(i, 0x886A, &at[i].norm);
+        p_glGetVertexAttribiv(i, 0x8624, &at[i].stride); p_glGetVertexAttribiv(i, 0x889F, &at[i].buf); p_glGetVertexAttribPointerv(i, 0x8645, &at[i].ptr);
+    }
+    // ---- grab the frame
+    p_glBindTexture(0x0DE1, g_GlTex);
+    p_glTexParameteri(0x0DE1, 0x2801, 0x2601); p_glTexParameteri(0x0DE1, 0x2800, 0x2601); p_glTexParameteri(0x0DE1, 0x2802, 0x812F); p_glTexParameteri(0x0DE1, 0x2803, 0x812F);
+    if (g_GlTexW != vp[2] || g_GlTexH != vp[3]) { p_glCopyTexImage2D(0x0DE1, 0, 0x1907, vp[0], vp[1], vp[2], vp[3], 0); g_GlTexW = vp[2]; g_GlTexH = vp[3]; }
+    else p_glCopyTexSubImage2D(0x0DE1, 0, 0, 0, vp[0], vp[1], vp[2], vp[3]);
+    // ---- draw it back through the shader
+    p_glDisable(0x0BE2); p_glDisable(0x0B71); p_glDisable(0x0B44); p_glDisable(0x0C11); p_glDisable(0x0B90); p_glColorMask(1, 1, 1, 1);
+    p_glBindBuffer(0x8892, g_GlVbo);
+    if (!g_GlData) { static const float q[16] = { -1, -1, 0, 0, 1, -1, 1, 0, -1, 1, 0, 1, 1, 1, 1, 1 }; p_glBufferData(0x8892, sizeof(q), q, 0x88E4); g_GlData = true; }
+    p_glVertexAttribPointer(0, 2, 0x1406, 0, 16, (const void*)0); p_glVertexAttribPointer(1, 2, 0x1406, 0, 16, (const void*)8);
+    p_glEnableVertexAttribArray(0); p_glEnableVertexAttribArray(1);
+    p_glUseProgram(g_GlProg);
+    p_glUniform1i(g_GlU[0], 0); p_glUniform1f(g_GlU[1], amt); p_glUniform1f(g_GlU[2], g_GreyContrast); p_glUniform1f(g_GlU[3], g_GreyBright);
+    if (blue) p_glUniform3f(g_GlU[4], 0.015f, 0.03f, 0.07f); else p_glUniform3f(g_GlU[4], 0.075f, 0.012f, 0.02f);
+    p_glUniform1f(g_GlU[5], g_GreyVig);
+    p_glDrawArrays(0x0005, 0, 4);
+    GLenum err = p_glGetError();
+    // ---- put everything back
+    p_glUseProgram(prog);
+    for (int i = 0; i < 2; ++i)
+    {
+        p_glBindBuffer(0x8892, at[i].buf);
+        if (at[i].size > 0) p_glVertexAttribPointer(i, at[i].size, at[i].type, (GLboolean)at[i].norm, at[i].stride, at[i].ptr);
+        if (at[i].en) p_glEnableVertexAttribArray(i); else p_glDisableVertexAttribArray(i);
+    }
+    p_glBindBuffer(0x8892, arrBuf);
+    p_glBindTexture(0x0DE1, tex0); p_glActiveTexture(actTex);
+    if (eBlend) p_glEnable(0x0BE2); if (eDepth) p_glEnable(0x0B71); if (eCull) p_glEnable(0x0B44); if (eScis) p_glEnable(0x0C11); if (eSten) p_glEnable(0x0B90);
+    p_glBlendFuncSeparate(bSrcC, bDstC, bSrcA, bDstA); p_glColorMask(cm[0], cm[1], cm[2], cm[3]);
+    if (err) { g_GlFailed = true; LOGE("grey shader gl error 0x%x: switched off", err); return false; }
+    static bool once = false; if (!once) { once = true; LOGI("grey shader drew a frame (viewport %d x %d)", vp[2], vp[3]); }
+    return true;
+}
+
 // ---------------------------------------------------------------- death screen (red 'wasted' look)
 // the word 'wasted' as merged rectangles (traced from the GTA 'wasted' logo): x0, y0, x1, y1 in a kWastedW x kWastedH grid
 static const int kWastedW = 815, kWastedH = 192, kWastedN = 475;
@@ -559,9 +683,13 @@ static void DrawDeathScreen()
     // grey screen right after death: desaturated, darker, with dark edges
     if (fg > 0.001f)
     {
+        // real desaturation through a shader; if that is not available (or the GL driver complains) the plain overlay below is used
+        if (!GreyGL(fg, g_Mode == 2))
+        {
         // dark, almost colourless look with a slight warm maroon cast (like the reference picture): darken first, then lay a dark grey over it
         rect(0, H, W, 0, 0, 0, 0, 95.f * fg);
         if (g_Mode == 2) rect(0, H, W, 0, 40, 44, 54, g_GreyStrength * fg); else rect(0, H, W, 0, 56, 44, 48, g_GreyStrength * fg);
+        }
         for (int i = 0; i < 0; ++i)   // edge frame removed
         {
             float bw = (0.015f + 0.017f * i) * W * 0.5f, bh = (0.015f + 0.017f * i) * H * 0.5f, a = 22.f * fg;
