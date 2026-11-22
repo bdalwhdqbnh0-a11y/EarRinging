@@ -560,7 +560,7 @@ static void DrawDeathScreen()
     {
         if (g_Mode == 2) rect(0, H, W, 0, 96, 104, 116, 165.f * fg); else rect(0, H, W, 0, 112, 106, 108, 165.f * fg);
         rect(0, H, W, 0, 0, 0, 0, 55.f * fg);
-        for (int i = 0; i < 18; ++i)
+        for (int i = 0; i < 0; ++i)   // edge frame removed
         {
             float bw = (0.015f + 0.017f * i) * W * 0.5f, bh = (0.015f + 0.017f * i) * H * 0.5f, a = 22.f * fg;
             rect(0, H, bw, 0, 28, 6, 8, a); rect(W - bw, H, W, 0, 28, 6, 8, a); rect(0, bh, W, 0, 28, 6, 8, a); rect(0, H, W, H - bh, 28, 6, 8, a);
@@ -571,9 +571,9 @@ static void DrawDeathScreen()
     rect(0, H, W, 0, 0, 0, 0, (bu ? 125.f : 150.f) * fr);                    // darken the scene
     if (bu) rect(0, H, W, 0, 6, 52, 120, 150.f * fr);                         // deep blue tint (busted)
     else    rect(0, H, W, 0, 140, 0, 12, g_DeathAlpha * 0.72f * fr * pulse);  // deep red tint
-    for (int i = 0; i < 12; ++i) rect(0, H, W, H * (0.45f + 0.045f * i), 0, 0, 0, 12.f * fr);   // darker toward the bottom
+    // (the stepped dark bands at the bottom and at the screen edges were removed: they looked like rectangular frames)
     // vignette: darker bands that thicken toward the edges
-    for (int i = 0; i < 18; ++i)
+    for (int i = 0; i < 0; ++i)   // edge frame removed
     {
         float bw = (0.015f + 0.015f * i) * W * 0.5f, bh = (0.015f + 0.015f * i) * H * 0.5f, a = 24.f * fr;
         uint8_t vr = bu ? 0 : 25, vg = bu ? 6 : 0, vb = bu ? 24 : 2; rect(0, H, bw, 0, vr, vg, vb, a); rect(W - bw, H, W, 0, vr, vg, vb, a); rect(0, bh, W, 0, vr, vg, vb, a); rect(0, H, W, H - bh, vr, vg, vb, a);
