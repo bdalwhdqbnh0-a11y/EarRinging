@@ -504,7 +504,7 @@ static void SlowMo(bool dead, float t)
     if (!g_DeathSlow || !g_TimeScaleD) return;
     if (dead)
     {
-        if (!g_SlowOn) { g_SavedScale = *g_TimeScaleD; if (!(g_SavedScale > 0.05f && g_SavedScale <= 1.5f)) g_SavedScale = 1.f; g_SlowOn = true; if (g_Log2) LOGI("slow motion on (was %.2f)", g_SavedScale); }
+        if (!g_SlowOn) { float was = *g_TimeScaleD; g_SavedScale = 1.f; g_SlowOn = true; if (g_Log2) LOGI("slow motion on (was %.2f, will return to 1.00)", was); }   // always return to normal speed: the game itself may have been slowing time at the moment of death
         float u = fminf(1.f, t / 0.5f);
         float tb0 = g_GreyTime + (g_BlackAt > 0.f ? g_BlackAt : (g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f));
         float back = fminf(1.f, fmaxf(0.f, (t - tb0) / 0.3f));          // normal speed again once the black screen is up, so the respawn is not dragged out
@@ -540,10 +540,14 @@ static void DrawDeathScreen()
     float t = (now - g_DeadSince) / 1000.f;
     const float greyT = g_Mode == 1 ? g_GreyTime : 0.f;
     SlowMo(dead && g_Mode == 1, t);
-    if (dead && !g_SndStarted && t >= greyT) { g_SndStarted = true; if (g_Mode == 2) PlaySnd(g_SndBusted, g_BustedSound != 0); else PlaySnd(g_SndWasted, g_DeathSound != 0); }   // the sound starts with the red 'wasted' screen
-    float target = dead ? 1.f : 0.f;
-    g_DeathFade += (target - g_DeathFade) * (dead ? 0.06f : 0.18f);
-    if (!dead && g_DeathFade < 0.02f) { g_DeadSince = 0; g_DeathFade = 0.f; UnmuteWorld(); SlowMo(false, 0.f); return; }
+    if (!g_SndStarted && t >= greyT) { g_SndStarted = true; if (g_Mode == 2) PlaySnd(g_SndBusted, g_BustedSound != 0); else PlaySnd(g_SndWasted, g_DeathSound != 0); }   // the sound starts with the red 'wasted' screen
+    // the game may restart the player before our sequence has finished (busted/wasted restart is quick): keep the screens up until the black screen has been shown
+    float tbNow = g_BlackAt > 0.f ? g_BlackAt : (g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f);
+    bool hold = !dead && t < greyT + tbNow + 1.3f;
+    bool active = dead || hold;
+    float target = active ? 1.f : 0.f;
+    g_DeathFade += (target - g_DeathFade) * (active ? 0.06f : 0.18f);
+    if (!active && g_DeathFade < 0.02f) { g_DeadSince = 0; g_DeathFade = 0.f; UnmuteWorld(); SlowMo(false, 0.f); return; }
     float W = (float)g_OSW(), H = (float)g_OSH(), k = H / 1080.f;
     float f = g_DeathFade, pulse = 0.92f + 0.08f * sinf(t * 5.f);
     float rf = fminf(1.f, fmaxf(0.f, (t - greyT) / 0.6f)), t2 = fmaxf(0.f, t - greyT);   // rf: red screen amount, t2: time since it started
