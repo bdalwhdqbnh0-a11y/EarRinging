@@ -538,12 +538,13 @@ GLF(void, glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, con
 GLF(void, glGetVertexAttribiv, (GLuint, GLenum, GLint*)) GLF(void, glGetVertexAttribPointerv, (GLuint, GLenum, void**)) GLF(void, glDrawArrays, (GLenum, GLint, GLsizei))
 GLF(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean)) GLF(void, glBlendFuncSeparate, (GLenum, GLenum, GLenum, GLenum)) GLF(GLenum, glGetError, ())
 
-static bool g_GlInit = false, g_GlFailed = false, g_GlData = false;
+static bool g_GlInit = false, g_GlData = false; static volatile bool g_GlFailed = false;
 static GLuint g_GlProg = 0, g_GlTex = 0, g_GlVbo = 0; static GLint g_GlU[6]; static int g_GlTexW = 0, g_GlTexH = 0;
 
 static GLuint GlCompile(GLenum type, const char* src)
 {
-    GLuint sh = p_glCreateShader(type); p_glShaderSource(sh, 1, &src, nullptr); p_glCompileShader(sh);
+    GLuint sh = p_glCreateShader(type); if (!sh) { LOGE("glCreateShader returned 0 (gl error 0x%x): no GL context on this thread?", p_glGetError()); return 0; }
+    p_glShaderSource(sh, 1, &src, nullptr); p_glCompileShader(sh);
     GLint ok = 0; p_glGetShaderiv(sh, 0x8B81, &ok);
     if (!ok) { char log[512] = { 0 }; p_glGetShaderInfoLog(sh, 511, nullptr, log); LOGE("grey shader compile failed: %s", log); return 0; }
     return sh;
@@ -653,8 +654,18 @@ static uint8_t* g_WBState = nullptr; static int g_Mode = 1;
 static float BlackTime() { if (g_BlackAt > 0.f) return g_BlackAt; if (g_Mode == 2) return g_BustedBlackAt; return g_SndDur > 1.f ? g_SndDur - 0.3f : 4.0f; }   // g_Mode: 1 = wasted (dead), 2 = busted (arrested)
 static long long g_DeadSince = 0, g_AliveSince = 0; static bool g_SndStarted = false; static float g_DeathFade = 0.f;
 static float DFrand(uint32_t& s2) { s2 = s2 * 1664525u + 1013904223u; return (float)((s2 >> 8) & 0xFFFF) / 65535.f; }
+// the game draws on its own render thread (render queue); the grey pass must run there, at the moment the frame is swapped, so the main thread only leaves a request
+static volatile float g_GreyReqAmt = 0.f; static volatile bool g_GreyReqBlue = false;
+typedef void (*Swap_t)(); static Swap_t Swap_orig = nullptr;
+static void Swap_hook()
+{
+    float a = g_GreyReqAmt;
+    if (a > 0.001f) GreyGL(a, g_GreyReqBlue);
+    Swap_orig();
+}
 static void DrawDeathScreen()
 {
+    g_GreyReqAmt = 0.f;
     if (!g_DeathScreen || !g_DrawRectD || !g_OSW || !g_OSH || !g_FindPlayer || !g_IsAlive) return;
     void* pl = g_FindPlayer(0); if (!pl) return;
     long long now = NowMs();
@@ -684,7 +695,8 @@ static void DrawDeathScreen()
     if (fg > 0.001f)
     {
         // real desaturation through a shader; if that is not available (or the GL driver complains) the plain overlay below is used
-        if (!GreyGL(fg, g_Mode == 2))
+        g_GreyReqBlue = (g_Mode == 2); g_GreyReqAmt = fg;     // drawn by Swap_hook on the render thread
+        if (!(g_GreyShader && !g_GlFailed))                     // shader not available: plain overlay instead
         {
         // dark, almost colourless look with a slight warm maroon cast (like the reference picture): darken first, then lay a dark grey over it
         rect(0, H, W, 0, 0, 0, 0, 95.f * fg);
@@ -802,6 +814,7 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     *(void**)&alGetError_ = (void*)ResolveExact("alGetError"); *(void**)&alcCur_ = (void*)ResolveExact("alcGetCurrentContext");
     LOGI("openal: genbuf=%p gensrc=%p data=%p play=%p err=%p ctx=%p", (void*)alGenBuffers_, (void*)alGenSources_, (void*)alBufferData_, (void*)alSourcePlay_, (void*)alGetError_, (void*)alcCur_);
     Install("_ZN4CHud23DrawBustedWastedMessageEv", (void*)DrawWasted_hook, &DrawWasted_orig);
+    Install("_Z20OS_ScreenSwapBuffersv", (void*)Swap_hook, &Swap_orig);
     Install("_ZN15CTouchInterface7DrawAllEb", (void*)DrawAll_hook, &DrawAll_orig);
     Install("_ZN4CPed16SetCurrentWeaponEi", (void*)SetCur_hook, &SetCur_orig);
     Install("_ZN6CTimer6UpdateEv", (void*)TimerUpdate_hook, &TimerUpdate_orig);
