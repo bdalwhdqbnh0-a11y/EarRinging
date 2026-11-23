@@ -287,6 +287,7 @@ static int   g_ChEnabled = 1, g_Flags = 0x14;
 static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static int g_GreyShader = 1; static float g_GreyContrast = 1.5f, g_GreyBright = 0.8f, g_GreyVig = 0.4f; static float g_BlackAt = 0.f; static float g_GreyStrength = 205.f; static float g_GreyTime = 1.5f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f; static int g_BustedScreen = 1; static int g_BustedSound = 1; static float g_BustedBlackAt = 3.5f;   // busted: seconds after the blue screen starts when the black screen appears
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
+static int g_LowLife = 1, g_LowNeedTired = 1; static float g_LowHealth = 15.f, g_LowBlend = 4.f;   // Low Life Animation: hand on the stomach at low health
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
 static void LoadChangeConfig()
 {
@@ -296,7 +297,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; 1 = real grey look through a shader (desaturated, contrasty, maroon shadows); 0 = plain overlay only\nGreyShader=1\nGreyContrast=1.5\nGreyBright=0.8\n; soft dark edges of the grey screen (0 = none, 1 = strong); smooth, not rectangular\nGreyVignette=0.4\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; 1 = real grey look through a shader (desaturated, contrasty, maroon shadows); 0 = plain overlay only\nGreyShader=1\nGreyContrast=1.5\nGreyBright=0.8\n; soft dark edges of the grey screen (0 = none, 1 = strong); smooth, not rectangular\nGreyVignette=0.4\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; Low Life Animation: hand on the stomach when health is low (1 = on)\nLowLife=1\n; health percent at or under which the animation plays\nLowLifeHealth=15\n; 1 = only while the tired idle pose is playing (like the original mod), 0 = whenever the player is on foot with low health\nLowLifeNeedTired=1\nLowLifeBlend=4\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -332,6 +333,10 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "DeathAlpha")) g_DeathAlpha = fminf(255.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "SwapAt")) g_SwapAt = fminf(0.95f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "AnimFlags")) g_Flags = (int)strtol(v, nullptr, 0);
+        else if (!strcasecmp(k, "LowLife")) g_LowLife = atoi(v);
+        else if (!strcasecmp(k, "LowLifeHealth")) g_LowHealth = fminf(100.f, fmaxf(1.f, (float)atof(v)));
+        else if (!strcasecmp(k, "LowLifeNeedTired")) g_LowNeedTired = atoi(v);
+        else if (!strcasecmp(k, "LowLifeBlend")) g_LowBlend = fminf(20.f, fmaxf(0.5f, (float)atof(v)));
         else if (!strcasecmp(k, "Log")) g_Log2 = atoi(v);
     }
     fclose(f);
@@ -406,10 +411,68 @@ static void SetCur_hook(void* ped, int slot)
     if (g_Log2) LOGI("played 'switch' assoc=%p speed %.1f total %.2f s, new weapon in %.0f ms", a, g_Speed, total, delayMs);
 }
 
+
+// ---------------------------------------------------------------- Low Life Animation (CLEO mod by Junior_Djjr, animation by Saga): hand on the stomach at low health
+static const unsigned char kLowLifeIfp[1304] = {65,78,80,51,200,1,0,0,76,79,87,76,73,70,69,0,114,105,112,116,69,120,112,0,0,0,0,0,0,0,0,0,1,0,0,0,115,116,111,109,97,99,104,95,104,117,114,116,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,0,140,0,0,0,1,0,0,0,32,83,112,105,110,101,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,2,0,0,0,14,0,21,0,190,255,255,15,0,0,47,0,24,0,193,1,230,15,24,0,32,83,112,105,110,101,49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,3,0,0,0,41,0,217,0,181,0,246,15,0,0,43,0,222,0,26,2,214,15,24,0,32,76,32,85,112,112,101,114,65,114,109,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,32,0,0,0,88,253,147,246,225,2,175,243,0,0,12,254,179,250,81,8,143,243,24,0,32,76,32,70,111,114,101,65,114,109,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,33,0,0,0,0,0,0,0,198,1,26,240,0,0,110,255,202,248,20,8,61,244,24,0,32,76,32,72,97,110,100,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,34,0,0,0,99,10,70,0,22,0,214,243,0,0,223,246,20,0,86,255,31,13,24,0,32,76,32,70,105,110,103,101,114,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,35,0,0,0,0,0,0,0,40,251,193,240,0,0,4,0,20,0,29,251,196,240,24,0,76,32,70,105,110,103,101,114,48,49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,36,0,0,0,0,0,0,0,172,249,79,241,0,0,15,0,13,0,161,249,83,241,24,0,66,105,112,48,49,32,82,32,67,108,97,118,105,99,108,101,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,21,0,0,0,11,10,61,254,187,243,207,254,0,0,14,10,76,254,186,243,226,254,24,0,32,82,32,85,112,112,101,114,65,114,109,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,22,0,0,0,9,2,19,9,21,2,39,243,0,0,25,2,21,9,4,2,40,243,24,0,32,82,32,70,111,114,101,65,114,109,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,23,0,0,0,0,0,0,0,190,0,5,240,0,0,3,0,6,0,167,0,4,240,24,0,32,82,32,72,97,110,100,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,24,0,0,0,23,244,108,255,219,253,142,245,0,0,26,244,96,255,200,253,143,245,24,0,32,82,32,70,105,110,103,101,114,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,25,0,0,0,201,255,53,0,240,246,210,242,0,0,189,255,33,0,238,246,211,242,24,0,82,32,70,105,110,103,101,114,48,49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,26,0,0,0,0,0,0,0,160,249,84,241,0,0,233,255,0,0,158,249,85,241,24,0,66,105,112,48,49,32,76,32,67,108,97,118,105,99,108,101,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,31,0,0,0,126,245,130,2,55,244,106,255,0,0,123,245,114,2,54,244,124,255,24,0,32,76,32,85,112,112,101,114,65,114,109,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,32,0,0,0,88,253,147,246,225,2,175,243,0,0,12,254,179,250,81,8,143,243,24,0,32,76,32,70,111,114,101,65,114,109,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,33,0,0,0,0,0,0,0,198,1,26,240,0,0,110,255,202,248,20,8,61,244,24,0,32,76,32,72,97,110,100,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,34,0,0,0,99,10,70,0,22,0,214,243,0,0,223,246,20,0,86,255,31,13,24,0,32,76,32,70,105,110,103,101,114,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,35,0,0,0,0,0,0,0,40,251,193,240,0,0,4,0,20,0,29,251,196,240,24,0,76,32,70,105,110,103,101,114,48,49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,36,0,0,0,0,0,0,0,172,249,79,241,0,0,15,0,13,0,161,249,83,241,24,0,66,101,108,108,121,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,201,0,0,0,0,0,0,0,32,11,127,11,0,0,1,0,0,0,49,11,111,11,24,0,82,32,98,114,101,97,115,116,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,45,1,0,0,47,255,165,255,186,10,214,11,0,0,48,255,166,255,203,10,198,11,24,0,76,32,98,114,101,97,115,116,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,2,0,0,0,46,1,0,0,197,1,43,1,83,10,9,12,0,0,195,1,46,1,100,10,250,11,24,0};
+typedef void* (*GetAssoc_t)(void*, const char*); static GetAssoc_t g_GetAssoc = nullptr;
+typedef void* (*FindVeh_t)(int, bool); static FindVeh_t g_FindVeh = nullptr;
+static uint8_t* g_PlayersBase = nullptr;
+static bool g_LLTried = false; static void* g_LLHier = nullptr; static uint8_t g_LLData[sizeof(kLowLifeIfp)];
+static void LoadLowLifeIfp()
+{
+    if (g_LLTried) return;
+    g_LLTried = true;
+    if (!g_RegBlock || !g_LoadAnim || !g_StreamOpen || !g_StreamClose || !g_GetBlock || !g_GetAnim) { LOGE("low life: anim symbols missing"); return; }
+    memcpy(g_LLData, kLowLifeIfp, sizeof(g_LLData));
+    char block[25] = { 0 }; memcpy(block, g_LLData + 8, 24);
+    g_RegBlock(block);
+    RwMemory mem = { g_LLData, (uint32_t)sizeof(g_LLData) };
+    void* st = g_StreamOpen(3, 1, &mem);
+    if (!st) { LOGE("low life: RwStreamOpen failed"); return; }
+    g_LoadAnim(st, false, nullptr);
+    g_StreamClose(st, nullptr);
+    void* blk = g_GetBlock(block);
+    g_LLHier = blk ? g_GetAnim("stomach_hurt", blk) : nullptr;
+    LOGI("low life: block '%s' lookup=%p 'stomach_hurt'=%p total %.2f s", block, blk, g_LLHier, g_LLHier ? *(float*)((uint8_t*)g_LLHier + 0x18) : 0.f);
+}
+static long long g_LLNext = 0; static bool g_LLOn = false; static bool g_LLLoggedHp = false;
+static void LowLifeTick()
+{
+    if (!g_LowLife || !g_FindPlayer || !g_GetAssoc || !g_PlayersBase) return;
+    long long now = NowMs(); if (now < g_LLNext) return; g_LLNext = now + 60;
+    void* ped = g_FindPlayer(0); if (!ped) return;
+    void* clump = *(void**)((uint8_t*)ped + 0x20); if (!clump) return;
+    float hp = *(float*)((uint8_t*)ped + 0x6ac); int mx = g_PlayersBase[0x18b]; if (mx < 20) mx = 100;
+    float pct = hp * 100.f / (float)mx;
+    if (!g_LLLoggedHp) { g_LLLoggedHp = true; if (g_Log2) LOGI("low life: health %.1f of max %d (%.1f%%)", hp, mx, pct); }
+    bool want = pct > 0.f && pct <= g_LowHealth && (!g_IsAlive || g_IsAlive(ped)) && !(g_FindVeh && g_FindVeh(-1, false))
+                && !(g_CutRunning && *g_CutRunning) && !(g_CutProc && *g_CutProc) && (!g_InControl || g_InControl(ped));
+    if (want && g_LowNeedTired && !g_GetAssoc(clump, "idle_tired")) want = false;
+    void* a = g_LLHier ? g_GetAssoc(clump, "stomach_hurt") : nullptr;
+    if (want)
+    {
+        LoadLowLifeIfp(); if (!g_LLHier) return;
+        if (!a) { a = g_Blend ? g_Blend(clump, g_LLHier, 0x14, g_LowBlend) : nullptr; if (a && !g_LLOn && g_Log2) LOGI("low life: animation on (health %.1f%%)", pct); g_LLOn = a != nullptr; }
+        if (a)
+        {
+            float total = *(float*)((uint8_t*)g_LLHier + 0x18);
+            if (total > 0.05f && total < 20.f && *(float*)((uint8_t*)a + 0x38) > total - 0.02f) *(float*)((uint8_t*)a + 0x38) = total - 0.02f;   // hold the last pose
+            if (*(float*)((uint8_t*)a + 0x34) < 0.f) *(float*)((uint8_t*)a + 0x34) = g_LowBlend;
+        }
+    }
+    else if (a)
+    {
+        if (*(float*)((uint8_t*)a + 0x34) >= 0.f) { *(float*)((uint8_t*)a + 0x34) = -g_LowBlend; if (g_Log2) LOGI("low life: animation off (health %.1f%%)", pct); }
+        g_LLOn = false;
+    }
+    else g_LLOn = false;
+}
+
 typedef void (*TimerUpdate_t)(); static TimerUpdate_t TimerUpdate_orig = nullptr;
 static void TimerUpdate_hook()
 {
     TimerUpdate_orig();
+    LowLifeTick();
     if (g_FadeA)
     {
         long long n2 = NowMs();
@@ -807,13 +870,15 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     *(void**)&g_GetAnim = (void*)ResolveExact("_ZN12CAnimManager12GetAnimationEPKcPK10CAnimBlock");
     *(void**)&g_Blend = (void*)ResolveExact("_ZN12CAnimManager14BlendAnimationEP7RpClumpP19CAnimBlendHierarchyif");
     *(void**)&g_InControl = (void*)ResolveExact("_ZN4CPed14IsPedInControlEv");
+    *(void**)&g_GetAssoc = (void*)ResolveExact("_Z30RpAnimBlendClumpGetAssociationP7RpClumpPKc"); *(void**)&g_FindVeh = (void*)ResolveExact("_Z17FindPlayerVehicleib");
+    LOGI("low life symbols: getassoc=%p findveh=%p", (void*)g_GetAssoc, (void*)g_FindVeh);
     g_CutRunning = (uint8_t*)ResolveExact("_ZN12CCutsceneMgr10ms_runningE");
     g_CutProc = (uint8_t*)ResolveExact("_ZN12CCutsceneMgr21ms_cutsceneProcessingE");
     LOGI("change symbols: reg=%p load=%p open=%p close=%p block=%p anim=%p blend=%p control=%p cut=%p/%p", (void*)g_RegBlock, (void*)g_LoadAnim, (void*)g_StreamOpen, (void*)g_StreamClose, (void*)g_GetBlock, (void*)g_GetAnim, (void*)g_Blend, (void*)g_InControl, g_CutRunning, g_CutProc);
     *(void**)&g_DrawRectD = (void*)ResolveExact("_ZN9CSprite2d8DrawRectERK5CRectRK5CRGBA");
     *(void**)&g_OSW = (void*)ResolveExact("_Z17OS_ScreenGetWidthv"); *(void**)&g_OSH = (void*)ResolveExact("_Z18OS_ScreenGetHeightv");
     g_TimeScaleD = (float*)ResolveExact("_ZN6CTimer13ms_fTimeScaleE");
-    { uint8_t* pl0 = (uint8_t*)ResolveExact("_ZN6CWorld7PlayersE"); g_WBState = pl0 ? pl0 + 0x118 : nullptr; LOGI("players=%p wbstate=%p", pl0, g_WBState); }
+    { uint8_t* pl0 = (uint8_t*)ResolveExact("_ZN6CWorld7PlayersE"); g_PlayersBase = pl0; g_WBState = pl0 ? pl0 + 0x118 : nullptr; LOGI("players=%p wbstate=%p", pl0, g_WBState); }
     g_AEHw = (uint8_t*)ResolveExact("AEAudioHardware"); *(void**)&g_Rescale = (void*)ResolveExact("_ZN16CAEAudioHardware21RescaleChannelVolumesEv");
     LOGI("audio hardware=%p rescale=%p", g_AEHw, (void*)g_Rescale);
     *(void**)&alGenBuffers_ = (void*)ResolveExact("alGenBuffers"); *(void**)&alGenSources_ = (void*)ResolveExact("alGenSources");
