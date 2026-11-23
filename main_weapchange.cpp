@@ -526,7 +526,7 @@ static void SlowMo(bool dead, float t, float tbl)
 // plain overlay (rectangles) is used instead.
 typedef unsigned int GLuint; typedef int GLint; typedef unsigned int GLenum; typedef int GLsizei; typedef float GLfloat; typedef unsigned char GLboolean; typedef char GLchar;
 #define GLF(ret, name, args) static ret (*p_##name) args = nullptr;
-GLF(void, glGetIntegerv, (GLenum, GLint*)) GLF(void, glGetBooleanv, (GLenum, GLboolean*)) GLF(GLboolean, glIsEnabled, (GLenum)) GLF(void, glEnable, (GLenum)) GLF(void, glDisable, (GLenum))
+GLF(void, glBindFramebuffer, (GLenum, GLuint)) GLF(void, glViewport, (GLint, GLint, GLsizei, GLsizei)) GLF(void, glGetIntegerv, (GLenum, GLint*)) GLF(void, glGetBooleanv, (GLenum, GLboolean*)) GLF(GLboolean, glIsEnabled, (GLenum)) GLF(void, glEnable, (GLenum)) GLF(void, glDisable, (GLenum))
 GLF(void, glActiveTexture, (GLenum)) GLF(void, glBindTexture, (GLenum, GLuint)) GLF(void, glGenTextures, (GLsizei, GLuint*)) GLF(void, glTexParameteri, (GLenum, GLenum, GLint))
 GLF(void, glCopyTexImage2D, (GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint)) GLF(void, glCopyTexSubImage2D, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei))
 GLF(GLuint, glCreateShader, (GLenum)) GLF(void, glShaderSource, (GLuint, GLsizei, const GLchar* const*, const GLint*)) GLF(void, glCompileShader, (GLuint)) GLF(void, glGetShaderiv, (GLuint, GLenum, GLint*))
@@ -555,7 +555,7 @@ static bool GlInit()
     if (!h) { LOGE("libGLESv2 not found"); return false; }
     bool ok = true;
 #define GLL(n) *(void**)&p_##n = dlsym(h, #n); if (!p_##n) { LOGE("missing GL function " #n); ok = false; }
-    GLL(glGetIntegerv) GLL(glGetBooleanv) GLL(glIsEnabled) GLL(glEnable) GLL(glDisable) GLL(glActiveTexture) GLL(glBindTexture) GLL(glGenTextures) GLL(glTexParameteri) GLL(glCopyTexImage2D) GLL(glCopyTexSubImage2D)
+    GLL(glBindFramebuffer) GLL(glViewport) GLL(glGetIntegerv) GLL(glGetBooleanv) GLL(glIsEnabled) GLL(glEnable) GLL(glDisable) GLL(glActiveTexture) GLL(glBindTexture) GLL(glGenTextures) GLL(glTexParameteri) GLL(glCopyTexImage2D) GLL(glCopyTexSubImage2D)
     GLL(glCreateShader) GLL(glShaderSource) GLL(glCompileShader) GLL(glGetShaderiv) GLL(glGetShaderInfoLog) GLL(glCreateProgram) GLL(glAttachShader) GLL(glBindAttribLocation) GLL(glLinkProgram) GLL(glGetProgramiv)
     GLL(glGetProgramInfoLog) GLL(glUseProgram) GLL(glGetUniformLocation) GLL(glUniform1i) GLL(glUniform1f) GLL(glUniform3f) GLL(glGenBuffers) GLL(glBindBuffer) GLL(glBufferData) GLL(glVertexAttribPointer)
     GLL(glEnableVertexAttribArray) GLL(glDisableVertexAttribArray) GLL(glGetVertexAttribiv) GLL(glGetVertexAttribPointerv) GLL(glDrawArrays) GLL(glColorMask) GLL(glBlendFuncSeparate) GLL(glGetError)
@@ -587,7 +587,7 @@ static bool GlInit()
     return true;
 }
 
-static volatile long long g_ShaderLastMs = 0; static volatile int g_ShaderFrames = 0;
+static volatile int g_ScrW = 0, g_ScrH = 0; static volatile long long g_ShaderLastMs = 0; static volatile int g_ShaderFrames = 0;
 static long long ClockMs() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000; }
 // returns true when the grey look was drawn with the shader
 static bool GreyGL(float amt, bool blue)
@@ -595,8 +595,11 @@ static bool GreyGL(float amt, bool blue)
     if (!g_GreyShader || g_GlFailed) return false;
     if (!g_GlInit) { g_GlInit = true; if (!GlInit()) { g_GlFailed = true; LOGE("grey shader off, using the plain overlay"); return false; } }
     if (!g_GlProg) return false;
-    GLint vp[4]; p_glGetIntegerv(0x0BA2, vp); if (vp[2] < 16 || vp[3] < 16) return false;
+    GLint gvp[4], gfbo = 0; p_glGetIntegerv(0x0BA2, gvp); p_glGetIntegerv(0x8CA6, &gfbo);
+    GLint vp[4] = { 0, 0, g_ScrW, g_ScrH }; if (vp[2] < 16 || vp[3] < 16) return false;
+    static bool once0 = false; if (!once0) { once0 = true; LOGI("swap time: bound framebuffer %d, game viewport %d,%d %dx%d, screen %dx%d -> drawing to framebuffer 0 with the screen size", gfbo, gvp[0], gvp[1], gvp[2], gvp[3], vp[2], vp[3]); }
     p_glGetError();
+    p_glBindFramebuffer(0x8D40, 0); p_glViewport(0, 0, vp[2], vp[3]);
     // ---- save the game's state
     GLint prog, actTex, tex0, arrBuf, bSrcC, bDstC, bSrcA, bDstA; GLboolean cm[4];
     p_glGetIntegerv(0x8B8D, &prog); p_glGetIntegerv(0x84E0, &actTex); p_glGetIntegerv(0x8894, &arrBuf);
@@ -628,6 +631,7 @@ static bool GreyGL(float amt, bool blue)
     GLenum err = p_glGetError();
     // ---- put everything back
     p_glUseProgram(prog);
+    p_glBindFramebuffer(0x8D40, (GLuint)gfbo); p_glViewport(gvp[0], gvp[1], gvp[2], gvp[3]);
     for (int i = 0; i < 2; ++i)
     {
         p_glBindBuffer(0x8892, at[i].buf);
@@ -690,6 +694,7 @@ static void DrawDeathScreen()
     g_DeathFade += (target - g_DeathFade) * (active ? 0.06f : 0.18f);
     if (!active && g_DeathFade < 0.02f) { g_DeadSince = 0; g_DeathFade = 0.f; UnmuteWorld(); SlowMo(false, 0.f, 0.f); return; }
     float W = (float)g_OSW(), H = (float)g_OSH(), k = H / 1080.f;
+    g_ScrW = (int)W; g_ScrH = (int)H;
     float f = g_DeathFade, pulse = 0.92f + 0.08f * sinf(t * 5.f);
     float rf = fminf(1.f, fmaxf(0.f, (t - greyT) / 0.6f)), t2 = fmaxf(0.f, t - greyT);   // rf: red screen amount, t2: time since it started
     float fr = f * rf, fg = f * fminf(1.f, t / 0.7f) * (1.f - rf);                                  // fg: grey screen amount
@@ -699,7 +704,6 @@ static void DrawDeathScreen()
     {
         // real desaturation through a shader; if that is not available (or the GL driver complains) the plain overlay below is used
         g_GreyReqBlue = (g_Mode == 2); g_GreyReqAmt = fg;     // drawn by Swap_hook on the render thread
-        g_ShaderFrames = 0;
         if (!(g_GreyShader && !g_GlFailed && ClockMs() - g_ShaderLastMs < 300))   // shader not drawing (unavailable, failed or not reached the screen): plain overlay instead
         {
         // dark, almost colourless look with a slight warm maroon cast (like the reference picture): darken first, then lay a dark grey over it
