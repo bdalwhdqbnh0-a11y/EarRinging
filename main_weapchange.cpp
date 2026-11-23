@@ -287,6 +287,7 @@ static int   g_ChEnabled = 1, g_Flags = 0x14;
 static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static int g_GreyShader = 1; static float g_GreyContrast = 1.5f, g_GreyBright = 0.8f, g_GreyVig = 0.4f; static float g_BlackAt = 0.f; static float g_GreyStrength = 205.f; static float g_GreyTime = 1.5f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f; static int g_BustedScreen = 1; static int g_BustedSound = 1; static float g_BustedBlackAt = 3.5f;   // busted: seconds after the blue screen starts when the black screen appears
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
+static int g_LowPant = 1; static float g_LowPantVol = 1.0f;
 static int g_LowLife = 1, g_LowNeedTired = 1, g_LowPantCtx = 0, g_LowPantEvery = 5000, g_LowHeart = 1; static float g_LowHeartVol = 0.8f; static float g_LowHealth = 15.f, g_LowBlend = 4.f;   // Low Life Animation: hand on the stomach at low health
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
 static void LoadChangeConfig()
@@ -297,7 +298,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; 1 = real grey look through a shader (desaturated, contrasty, maroon shadows); 0 = plain overlay only\nGreyShader=1\nGreyContrast=1.5\nGreyBright=0.8\n; soft dark edges of the grey screen (0 = none, 1 = strong); smooth, not rectangular\nGreyVignette=0.4\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; Low Life Animation: hand on the stomach when health is low (1 = on)\nLowLife=1\n; health percent at or under which the animation plays\nLowLifeHealth=15\n; 1 = only while the tired idle pose is playing (like the original mod), 0 = whenever the player is on foot with low health\nLowLifeNeedTired=1\nLowLifeBlend=4\n; heartbeat sound (heartbeat.wav in this folder) while the animation plays: 1 = on, volume 0-1\nLowLifeHeartbeat=1\nLowLifeHeartVolume=0.8\n; game speech id for the character breathing/panting voice (0 = off) and seconds between repeats\nLowLifePantContext=0\nLowLifePantEvery=5\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; 1 = real grey look through a shader (desaturated, contrasty, maroon shadows); 0 = plain overlay only\nGreyShader=1\nGreyContrast=1.5\nGreyBright=0.8\n; soft dark edges of the grey screen (0 = none, 1 = strong); smooth, not rectangular\nGreyVignette=0.4\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; Low Life Animation: hand on the stomach when health is low (1 = on)\nLowLife=1\n; health percent at or under which the animation plays\nLowLifeHealth=15\n; 1 = only while the tired idle pose is playing (like the original mod), 0 = whenever the player is on foot with low health\nLowLifeNeedTired=1\nLowLifeBlend=4\n; heartbeat sound (heartbeat.wav in this folder) while the animation plays: 1 = on, volume 0-1\nLowLifeHeartbeat=1\nLowLifeHeartVolume=0.8\n; panting / gasping voice (pant.wav in this folder: 18 short sounds, one chosen at random) while the animation plays: 1 = on, volume 0-1, average seconds between sounds\nLowLifePant=1\nLowLifePantVolume=1.0\nLowLifePantEvery=5\n; (optional) game speech id for an extra voice from the game itself (0 = off)\nLowLifePantContext=0\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -338,6 +339,8 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "LowLifeNeedTired")) g_LowNeedTired = atoi(v);
         else if (!strcasecmp(k, "LowLifeHeartbeat")) g_LowHeart = atoi(v);
         else if (!strcasecmp(k, "LowLifeHeartVolume")) g_LowHeartVol = fminf(1.f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "LowLifePant")) g_LowPant = atoi(v);
+        else if (!strcasecmp(k, "LowLifePantVolume")) g_LowPantVol = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "LowLifePantContext")) g_LowPantCtx = atoi(v);
         else if (!strcasecmp(k, "LowLifePantEvery")) g_LowPantEvery = (int)fmaxf(1000.f, (float)atof(v) * 1000.f);
         else if (!strcasecmp(k, "LowLifeBlend")) g_LowBlend = fminf(20.f, fmaxf(0.5f, (float)atof(v)));
@@ -439,7 +442,7 @@ static void LoadLowLifeIfp()
     g_LLHier = blk ? g_GetAnim("stomach_hurt", blk) : nullptr;
     LOGI("low life: block '%s' lookup=%p 'stomach_hurt'=%p total %.2f s", block, blk, g_LLHier, g_LLHier ? *(float*)((uint8_t*)g_LLHier + 0x18) : 0.f);
 }
-static void HeartSet(bool on);
+static void HeartSet(bool on); static void PantTick(bool on, long long now);
 typedef void (*PedSay_t)(void*, unsigned short, unsigned int, float, unsigned char, unsigned char, unsigned char); static PedSay_t g_PedSay = nullptr; static long long g_PantNext = 0;
 static long long g_LLNext = 0; static bool g_LLOn = false; static bool g_LLLoggedHp = false;
 static void LowLifeTick()
@@ -473,6 +476,7 @@ static void LowLifeTick()
     }
     else g_LLOn = false;
     HeartSet(g_LLOn && g_LowHeart);
+    PantTick(g_LLOn && g_LowPant, now);
     if (g_LLOn && g_LowPantCtx > 0 && g_PedSay && now >= g_PantNext) { g_PantNext = now + g_LowPantEvery; g_PedSay(ped, (unsigned short)g_LowPantCtx, 0, 1.f, 0, 1, 0); if (g_Log2) LOGI("low life: breathing voice, speech id %d", g_LowPantCtx); }
 }
 
@@ -514,7 +518,7 @@ static void (*alGenBuffers_)(int, ALuint*) = nullptr; static void (*alGenSources
 static void (*alBufferData_)(ALuint, int, const void*, int, int) = nullptr; static void (*alSourcei_)(ALuint, int, int) = nullptr; static void (*alSourcef_)(ALuint, int, float) = nullptr;
 static void (*alSourcePlay_)(ALuint) = nullptr; static void (*alSourceStop_)(ALuint) = nullptr; static int (*alGetError_)() = nullptr; static void* (*alcCur_)() = nullptr;
 struct Snd { const char* file; ALuint buf, src; bool tried, ok; float dur; bool loop; };
-static Snd g_SndWasted = { "wasted.wav", 0, 0, false, false, 0.f, false }, g_SndBusted = { "busted.wav", 0, 0, false, false, 0.f, false }, g_SndHeart = { "heartbeat.wav", 0, 0, false, false, 0.f, true };
+static Snd g_SndWasted = { "wasted.wav", 0, 0, false, false, 0.f, false }, g_SndBusted = { "busted.wav", 0, 0, false, false, 0.f, false }, g_SndHeart = { "heartbeat.wav", 0, 0, false, false, 0.f, true }, g_SndPant = { "pant.wav", 0, 0, false, false, 0.f, false };
 static bool LoadWav(Snd& sn)
 {
     FILE* f = fopen((g_Dir + sn.file).c_str(), "rb"); if (!f) { LOGE("%s not found in %s", sn.file, g_Dir.c_str()); return false; }
@@ -572,6 +576,34 @@ static void HeartSet(bool on)
     }
     else { if (g_SndHeart.ok && alSourceStop_) alSourceStop_(g_SndHeart.src); if (g_Log2) LOGI("heartbeat off"); }
     state = on;
+}
+
+// pant.wav holds 18 short gasps one after another: start / length in seconds of each
+static const float kPant[18][2] = {{0.000f,0.830f},{0.930f,0.620f},{1.650f,0.610f},{2.360f,1.230f},{3.690f,0.380f},{4.170f,0.500f},{4.770f,0.450f},{5.320f,0.680f},{6.100f,0.490f},{6.690f,0.520f},{7.310f,1.120f},{8.530f,0.490f},{9.120f,1.100f},{10.320f,0.880f},{11.300f,0.390f},{11.790f,0.400f},{12.290f,0.370f},{12.760f,0.410f}};
+static void PantTick(bool on, long long now)
+{
+    static long long nextAt = 0, stopAt = 0; static int last = -1; static bool playing = false;
+    if (!on)
+    {
+        if (playing && g_SndPant.ok && alSourceStop_) alSourceStop_(g_SndPant.src);
+        playing = false; nextAt = 0; return;
+    }
+    if (playing && now >= stopAt) { if (g_SndPant.ok && alSourceStop_) alSourceStop_(g_SndPant.src); playing = false; }
+    if (playing || now < nextAt) return;
+    if (!alGenBuffers_ || !alGenSources_ || !alBufferData_ || !alSourcei_ || !alSourcef_ || !alSourcePlay_ || !alGetError_) return;
+    if (alcCur_ && !alcCur_()) return;
+    if (!nextAt) { nextAt = now + 600; return; }                     // the first one comes shortly after the animation starts
+    if (!g_SndPant.tried) { g_SndPant.tried = true; g_SndPant.ok = LoadWav(g_SndPant); }
+    if (!g_SndPant.ok) { nextAt = now + 60000; return; }
+    int i = (int)(((unsigned)rand()) % 18); if (i == last) i = (i + 1) % 18; last = i;
+    if (alSourceStop_) alSourceStop_(g_SndPant.src);
+    alSourcef_(g_SndPant.src, 0x1024, kPant[i][0]);                    // AL_SEC_OFFSET
+    alSourcef_(g_SndPant.src, 0x100A, g_LowPantVol);
+    alSourcePlay_(g_SndPant.src);
+    playing = true; stopAt = now + (long long)(kPant[i][1] * 1000.f) + 30;
+    float every = (float)g_LowPantEvery * (0.7f + 0.6f * ((float)(rand() & 1023) / 1023.f));
+    nextAt = stopAt + (long long)every;
+    if (g_Log2) LOGI("pant sound %d played (al error 0x%x)", i, alGetError_());
 }
 
 // ---------------------------------------------------------------- mute the world while dead (the game's master volumes live in the audio hardware object)
