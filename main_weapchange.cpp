@@ -287,6 +287,7 @@ static int   g_ChEnabled = 1, g_Flags = 0x14;
 static int g_DeathScreen = 1; static float g_DeathAlpha = 175.f; static int g_DeathSound = 1; static int g_MuteWorld = 1; static int g_GreyShader = 1; static float g_GreyContrast = 1.5f, g_GreyBright = 0.8f, g_GreyVig = 0.4f; static float g_BlackAt = 0.f; static float g_GreyStrength = 205.f; static float g_GreyTime = 1.5f; static float g_SndDur = 0.f; static int g_DeathSlow = 1; static float g_SlowScale = 0.25f; static float g_DeathVol = 1.0f; static int g_BustedScreen = 1; static int g_BustedSound = 1; static float g_BustedBlackAt = 3.5f;   // busted: seconds after the blue screen starts when the black screen appears
 static float g_FadeAt = 0.8f, g_FadeRate = 8.f;   // the hand is released (fast fade-out) when this part of the clip has played
 static float g_SwapAt = 0.35f;   // fraction of the clip after which the new weapon appears (hand is at the body)
+static volatile bool g_GlFailed = false; static volatile float g_LLReqBlood = 0.f, g_LLReqGrey = 0.f; static int g_LowBlood = 1; static float g_LowBloodStr = 1.0f, g_LowGrey = 0.55f;
 static int g_LowPant = 1; static float g_LowPantVol = 1.0f;
 static int g_LowLife = 1, g_LowNeedTired = 1, g_LowPantCtx = 0, g_LowPantEvery = 5000, g_LowHeart = 1; static float g_LowHeartVol = 1.0f; static float g_LowHealth = 45.f, g_LowBlend = 4.f;   // Low Life Animation: hand on the stomach at low health
 static float g_StartSpeed = 9.0f, g_Speed = 3.0f;     // blend-in rate and play speed (same meaning as 'Animation speed start' / 'Animation speed' of the CLEO mod)
@@ -298,7 +299,7 @@ static void LoadChangeConfig()
     {
         f = fopen(p.c_str(), "w");
         if (f) { fputs("; WeaponChange Android - settings (put weapc.ifp in this folder)\n[Settings]\nEnabled=1\n; blend-in rate\nAnimationSpeedStart=9.0\n; play speed (3.0 = 3x normal)\nAnimationSpeed=3.0\n"
-                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; 1 = real grey look through a shader (desaturated, contrasty, maroon shadows); 0 = plain overlay only\nGreyShader=1\nGreyContrast=1.5\nGreyBright=0.8\n; soft dark edges of the grey screen (0 = none, 1 = strong); smooth, not rectangular\nGreyVignette=0.4\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; Low Life Animation: hand on the stomach when health is low (1 = on)\nLowLife=1\n; health percent at or under which the animation plays\nLowLifeHealth=45\n; 1 = only while the tired idle pose is playing (like the original mod), 0 = whenever the player is on foot with low health\nLowLifeNeedTired=1\nLowLifeBlend=4\n; heartbeat sound (heartbeat.wav in this folder) while the animation plays: 1 = on, volume 0-1\nLowLifeHeartbeat=1\nLowLifeHeartVolume=1.0\n; panting / gasping voice (pant.wav in this folder: 18 short sounds, one chosen at random) while the animation plays: 1 = on, volume 0-1, average seconds between sounds\nLowLifePant=1\nLowLifePantVolume=1.0\nLowLifePantEvery=5\n; (optional) game speech id for an extra voice from the game itself (0 = off)\nLowLifePantContext=0\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
+                       "; animation flags: 0x14 = partial (upper body) + remove when faded out\n; the new weapon appears after this part of the animation (0 = at once, 0.35 = when the hand reaches the body)\nSwapAt=0.35\n; red death screen when the player dies (1 = on, 0 = off) and how dark the red wash is (0-255)\nDeathScreen=1\nDeathAlpha=175\n; death sound (wasted.wav in this folder, played through the game's OpenAL) and its volume (0 to 1; 1 = the loudest the game's audio allows - the file itself is already loud)\n; 1 = mute the game's sounds and radio while the death screen is shown (only the death sound is heard)\n; slow motion while the death screen is shown (1 = on) and its speed (0.25 = four times slower)\nDeathSlowMo=1\nDeathSlowScale=0.25\n; seconds of the grey screen right after death, before the red 'wasted' screen and its sound start\nGreyScreenTime=1.5\n; how grey the grey screen is (0-255; higher = less colour left from the game)\nGreyStrength=205\n; 1 = real grey look through a shader (desaturated, contrasty, maroon shadows); 0 = plain overlay only\nGreyShader=1\nGreyContrast=1.5\nGreyBright=0.8\n; soft dark edges of the grey screen (0 = none, 1 = strong); smooth, not rectangular\nGreyVignette=0.4\n; seconds after the red screen starts when the black screen with the red word appears (0 = when the death sound ends)\nBlackScreenAt=0\n; blue 'busted' screen when the police arrest the player (1 = on) and its sound (busted.wav in this folder)\nBustedScreen=1\nBustedSound=1\n; busted: seconds after the blue screen starts when the black screen appears\nBustedBlackAt=3.5\nMuteWorldOnDeath=1\nDeathSound=1\nDeathSoundVolume=1.0\n; the hand is released when this part of the clip has played (0.8 = near the end), and fades out at this rate (bigger = faster)\nFadeAt=0.8\nFadeRate=8\nAnimFlags=0x14\n; Low Life Animation: hand on the stomach when health is low (1 = on)\nLowLife=1\n; health percent at or under which the animation plays\nLowLifeHealth=45\n; 1 = only while the tired idle pose is playing (like the original mod), 0 = whenever the player is on foot with low health\nLowLifeNeedTired=1\nLowLifeBlend=4\n; heartbeat sound (heartbeat.wav in this folder) while the animation plays: 1 = on, volume 0-1\nLowLifeHeartbeat=1\nLowLifeHeartVolume=1.0\n; blood on the edges of the screen and a greyer picture while the animation plays (1 = on); strength 0-1.5, grey amount 0-1 (needs GreyShader=1)\nLowLifeBlood=1\nLowLifeBloodStrength=1.0\nLowLifeGrey=0.55\n; panting / gasping voice (pant.wav in this folder: 18 short sounds, one chosen at random) while the animation plays: 1 = on, volume 0-1, average seconds between sounds\nLowLifePant=1\nLowLifePantVolume=1.0\nLowLifePantEvery=5\n; (optional) game speech id for an extra voice from the game itself (0 = off)\nLowLifePantContext=0\n; 1 = write one line per weapon change to log.txt\nLog=1\n", f); fclose(f); }
         return;
     }
     char line[256];
@@ -339,6 +340,9 @@ static void LoadChangeConfig()
         else if (!strcasecmp(k, "LowLifeNeedTired")) g_LowNeedTired = atoi(v);
         else if (!strcasecmp(k, "LowLifeHeartbeat")) g_LowHeart = atoi(v);
         else if (!strcasecmp(k, "LowLifeHeartVolume")) g_LowHeartVol = fminf(1.f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "LowLifeBlood")) g_LowBlood = atoi(v);
+        else if (!strcasecmp(k, "LowLifeBloodStrength")) g_LowBloodStr = fminf(1.5f, fmaxf(0.f, (float)atof(v)));
+        else if (!strcasecmp(k, "LowLifeGrey")) g_LowGrey = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "LowLifePant")) g_LowPant = atoi(v);
         else if (!strcasecmp(k, "LowLifePantVolume")) g_LowPantVol = fminf(1.f, fmaxf(0.f, (float)atof(v)));
         else if (!strcasecmp(k, "LowLifePantContext")) g_LowPantCtx = atoi(v);
@@ -449,8 +453,8 @@ static void LowLifeTick()
 {
     if (!g_LowLife || !g_FindPlayer || !g_GetAssoc || !g_PlayersBase) return;
     long long now = NowMs(); if (now < g_LLNext) return; g_LLNext = now + 60;
-    void* ped = g_FindPlayer(0); if (!ped) return;
-    void* clump = *(void**)((uint8_t*)ped + 0x20); if (!clump) return;
+    void* ped = g_FindPlayer(0); if (!ped) { g_LLReqBlood = 0.f; g_LLReqGrey = 0.f; return; }
+    void* clump = *(void**)((uint8_t*)ped + 0x20); if (!clump) { g_LLReqBlood = 0.f; g_LLReqGrey = 0.f; return; }
     float hp = *(float*)((uint8_t*)ped + 0x6ac); int mx = g_PlayersBase[0x18b]; if (mx < 20) mx = 100;
     float pct = hp * 100.f / (float)mx;
     if (!g_LLLoggedHp) { g_LLLoggedHp = true; if (g_Log2) LOGI("low life: health %.1f of max %d (%.1f%%)", hp, mx, pct); }
@@ -477,6 +481,13 @@ static void LowLifeTick()
     else g_LLOn = false;
     HeartSet(g_LLOn && g_LowHeart);
     PantTick(g_LLOn && g_LowPant, now);
+    {
+        static float fade = 0.f;
+        float target = (g_LLOn && g_LowBlood && g_GreyShader && !g_GlFailed) ? 1.f : 0.f;
+        fade += (target - fade) * (target > fade ? 0.10f : 0.12f); if (fade < 0.004f && target == 0.f) fade = 0.f;
+        float sev = fminf(1.f, fmaxf(0.f, (g_LowHealth - pct) / g_LowHealth));
+        g_LLReqBlood = fade * (0.55f + 0.45f * sev) * g_LowBloodStr; g_LLReqGrey = fade * g_LowGrey;
+    }
     if (g_LLOn && g_LowPantCtx > 0 && g_PedSay && now >= g_PantNext) { g_PantNext = now + g_LowPantEvery; g_PedSay(ped, (unsigned short)g_LowPantCtx, 0, 1.f, 0, 1, 0); if (g_Log2) LOGI("low life: breathing voice, speech id %d", g_LowPantCtx); }
 }
 
@@ -659,7 +670,7 @@ GLF(void, glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, con
 GLF(void, glGetVertexAttribiv, (GLuint, GLenum, GLint*)) GLF(void, glGetVertexAttribPointerv, (GLuint, GLenum, void**)) GLF(void, glDrawArrays, (GLenum, GLint, GLsizei))
 GLF(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean)) GLF(void, glBlendFuncSeparate, (GLenum, GLenum, GLenum, GLenum)) GLF(GLenum, glGetError, ())
 
-static bool g_GlInit = false, g_GlData = false; static volatile bool g_GlFailed = false;
+static bool g_GlInit = false, g_GlData = false;
 static GLuint g_GlProg = 0, g_GlTex = 0, g_GlVbo = 0; static GLint g_GlU[6]; static int g_GlTexW = 0, g_GlTexH = 0;
 
 static GLuint GlCompile(GLenum type, const char* src)
@@ -686,7 +697,9 @@ static bool GlInit()
     const char* vs = "attribute vec2 aPos; attribute vec2 aUV; varying vec2 vUV; void main() { vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }";
     const char* fs =
         "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n"
-        "varying vec2 vUV; uniform sampler2D uTex; uniform float uAmt; uniform float uContrast; uniform float uBright; uniform vec3 uShadow; uniform float uVig; uniform float uDiag;\n"
+        "varying vec2 vUV; uniform sampler2D uTex; uniform float uAmt; uniform float uContrast; uniform float uBright; uniform vec3 uShadow; uniform float uVig; uniform float uDiag; uniform float uBlood; uniform float uTime;\n"
+        "float hh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\n"
+        "float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(hh(i), hh(i + vec2(1.0, 0.0)), f.x), mix(hh(i + vec2(0.0, 1.0)), hh(i + vec2(1.0, 1.0)), f.x), f.y); }\n"
         "void main() {\n"
         "  vec3 c = texture2D(uTex, vUV).rgb;\n"
         "  float l = dot(c, vec3(0.299, 0.587, 0.114));\n"
@@ -694,7 +707,18 @@ static bool GlInit()
         "  vec3 gr = vec3(g) * vec3(1.0, 0.94, 0.96) + uShadow * (1.0 - g);\n"
         "  float d = length(vUV - vec2(0.5)) * 1.4142;\n"
         "  gr *= 1.0 - uVig * smoothstep(0.35, 1.0, d);\n"
-        "  gl_FragColor = vec4(mix(c, uDiag > 0.5 ? vec3(1.0, 0.0, 1.0) : gr, uAmt), 1.0);\n"
+        "  vec3 oc = mix(c, uDiag > 0.5 ? vec3(1.0, 0.0, 1.0) : gr, uAmt);\n"
+        "  if (uBlood > 0.001) {\n"
+        "    float n = vn(vUV * vec2(7.0, 4.0)) * 0.6 + vn(vUV * vec2(19.0, 11.0)) * 0.4;\n"
+        "    float dd = length((vUV - vec2(0.5)) * vec2(1.0, 0.8)) * 1.75 + (n - 0.5) * 0.42;\n"
+        "    float edge = smoothstep(0.50, 1.02, dd);\n"
+        "    float pulse = 0.82 + 0.18 * sin(uTime * 7.0);\n"
+        "    float b = clamp(edge * uBlood * pulse * 1.3, 0.0, 1.0);\n"
+        "    vec3 bc = mix(vec3(0.62, 0.03, 0.04), vec3(0.20, 0.0, 0.01), n);\n"
+        "    oc = mix(oc, bc, b * 0.88);\n"
+        "    oc *= 1.0 - 0.3 * edge * uBlood;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(oc, 1.0);\n"
         "}\n";
     GLuint v = GlCompile(0x8B31, vs), f = GlCompile(0x8B30, fs); if (!v || !f) return false;
     g_GlProg = p_glCreateProgram(); p_glAttachShader(g_GlProg, v); p_glAttachShader(g_GlProg, f);
@@ -711,7 +735,7 @@ static bool GlInit()
 static volatile int g_ScrW = 0, g_ScrH = 0; static volatile long long g_ShaderLastMs = 0; static volatile int g_ShaderFrames = 0;
 static long long ClockMs() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000; }
 // returns true when the grey look was drawn with the shader
-static bool GreyGL(float amt, bool blue)
+static bool GreyGL(float amt, bool blue, float contrast, float bright, float vig, float blood)
 {
     if (!g_GreyShader || g_GlFailed) return false;
     if (!g_GlInit) { g_GlInit = true; if (!GlInit()) { g_GlFailed = true; LOGE("grey shader off, using the plain overlay"); return false; } }
@@ -745,9 +769,10 @@ static bool GreyGL(float amt, bool blue)
     p_glVertexAttribPointer(0, 2, 0x1406, 0, 16, (const void*)0); p_glVertexAttribPointer(1, 2, 0x1406, 0, 16, (const void*)8);
     p_glEnableVertexAttribArray(0); p_glEnableVertexAttribArray(1);
     p_glUseProgram(g_GlProg);
-    p_glUniform1i(g_GlU[0], 0); p_glUniform1f(g_GlU[1], amt); p_glUniform1f(g_GlU[2], g_GreyContrast); p_glUniform1f(g_GlU[3], g_GreyBright);
+    p_glUniform1i(g_GlU[0], 0); p_glUniform1f(g_GlU[1], amt); p_glUniform1f(g_GlU[2], contrast); p_glUniform1f(g_GlU[3], bright);
     if (blue) p_glUniform3f(g_GlU[4], 0.015f, 0.03f, 0.07f); else p_glUniform3f(g_GlU[4], 0.075f, 0.012f, 0.02f);
-    p_glUniform1f(g_GlU[5], g_GreyVig); { GLint ud = p_glGetUniformLocation(g_GlProg, "uDiag"); if (ud >= 0) p_glUniform1f(ud, g_GreyShader == 2 ? 1.f : 0.f); }
+    p_glUniform1f(g_GlU[5], vig);
+    { static GLint ub = -2, ut = -2; if (ub == -2) { ub = p_glGetUniformLocation(g_GlProg, "uBlood"); ut = p_glGetUniformLocation(g_GlProg, "uTime"); } if (ub >= 0) p_glUniform1f(ub, blood); if (ut >= 0) p_glUniform1f(ut, (float)fmod((double)ClockMs() / 1000.0, 1000.0)); } { GLint ud = p_glGetUniformLocation(g_GlProg, "uDiag"); if (ud >= 0) p_glUniform1f(ud, g_GreyShader == 2 ? 1.f : 0.f); }
     p_glDrawArrays(0x0005, 0, 4);
     GLenum err = p_glGetError();
     // ---- put everything back
@@ -788,7 +813,8 @@ typedef void (*Swap_t)(); static Swap_t Swap_orig = nullptr;
 static void Swap_hook()
 {
     float a = g_GreyReqAmt;
-    if (a > 0.001f) GreyGL(a, g_GreyReqBlue);
+    if (a > 0.001f) GreyGL(a, g_GreyReqBlue, g_GreyContrast, g_GreyBright, g_GreyVig, 0.f);
+    else if (g_LLReqBlood > 0.003f || g_LLReqGrey > 0.003f) GreyGL(g_LLReqGrey, false, 1.1f, 1.0f, 0.25f, g_LLReqBlood);
     Swap_orig();
 }
 static void DrawDeathScreen()
