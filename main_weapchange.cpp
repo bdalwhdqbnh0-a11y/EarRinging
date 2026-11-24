@@ -458,6 +458,23 @@ static long long g_LLNext = 0; static bool g_LLOn = false; static bool g_LLLogge
 typedef int (*BlockIdx_t)(const char*); static BlockIdx_t g_BlockIdx = nullptr;
 typedef void (*ReqModel_t)(int, int); static ReqModel_t g_ReqModel = nullptr;
 typedef void (*LoadAll_t)(bool); static LoadAll_t g_LoadAllReq = nullptr;
+typedef void* (*TaskNew_t)(size_t); static TaskNew_t g_TaskNew = nullptr;
+typedef void (*NamedAnimCtor_t)(void*, const char*, const char*, int, float, int, bool, bool, bool, bool); static NamedAnimCtor_t g_NamedAnimCtor = nullptr;
+typedef void (*EvCmdCtor_t)(void*, int, void*, bool); static EvCmdCtor_t g_EvCmdCtor = nullptr;
+typedef void (*EvCmdDtor_t)(void*); static EvCmdDtor_t g_EvCmdDtor = nullptr;
+typedef void* (*EvGroupAdd_t)(void*, void*, bool); static EvGroupAdd_t g_EvGroupAdd = nullptr;
+static bool GiveVomitTask(void* ped)      // the same steps the game's own script command TASK_PLAY_ANIM takes for the player: a task wrapped in a script-command event
+{
+    if (!g_TaskNew || !g_NamedAnimCtor || !g_EvCmdCtor || !g_EvCmdDtor || !g_EvGroupAdd) return false;
+    void* intel = *(void**)((uint8_t*)ped + 0x538); if (!intel) return false;
+    void* task = g_TaskNew(0x78); if (!task) return false;
+    g_NamedAnimCtor(task, "EAT_Vomit_P", "FOOD", 0x10, 4.0f, -1, false, false, false, false);
+    alignas(16) uint8_t ev[64]; memset(ev, 0, sizeof(ev));
+    g_EvCmdCtor(ev, 3, task, false);
+    void* r = g_EvGroupAdd((uint8_t*)intel + 0xc8, ev, false);
+    g_EvCmdDtor(ev);
+    return r != nullptr;
+}
 static void* g_VomHier = nullptr; static int g_VomTries = 0; static long long g_VomRetry = 0;
 static void LoadVomit(long long now)
 {
@@ -481,8 +498,9 @@ static void VomitTick(void* ped, void* clump, bool fxOn, long long now)
     if (now < g_VomNext || !g_VomHier) return;
     bool onFoot = !(g_FindVeh && g_FindVeh(-1, false)) && (!g_InControl || g_InControl(ped));
     if (!onFoot || !g_Blend) return;                                  // wait until the player is standing/walking on foot
-    void* a = g_Blend(clump, g_VomHier, 0xC, 8.0f);                   // plays once and fades out (0x4 = remove when faded, 0x8 = fade when finished)
-    if (g_Log2) LOGI("vomit: animation played, assoc=%p", a);
+    bool ok = GiveVomitTask(ped);
+    if (!ok) { void* a = g_Blend(clump, g_VomHier, 0xC, 8.0f); if (g_Log2) LOGI("vomit: task not possible, plain blend used, assoc=%p", a); }
+    else if (g_Log2) LOGI("vomit: task given to the player");
     g_VomNext = g_LowVomitRepeat > 0.f ? now + (long long)(g_LowVomitRepeat * 1000.f) : now + 360000000LL;
 }
 static void LowLifeTick()
@@ -996,7 +1014,9 @@ extern "C" __attribute__((visibility("default"))) void OnModLoad()
     *(void**)&g_GetAssoc = (void*)ResolveExact("_Z30RpAnimBlendClumpGetAssociationP7RpClumpPKc"); *(void**)&g_FindVeh = (void*)ResolveExact("_Z17FindPlayerVehicleib");
     *(void**)&g_PedSay = (void*)ResolveExact("_ZN4CPed3SayEtjfhhh");
     *(void**)&g_BlockIdx = (void*)ResolveExact("_ZN12CAnimManager22GetAnimationBlockIndexEPKc"); *(void**)&g_ReqModel = (void*)ResolveExact("_ZN10CStreaming12RequestModelEii"); *(void**)&g_LoadAllReq = (void*)ResolveExact("_ZN10CStreaming22LoadAllRequestedModelsEb");
-    LOGI("vomit symbols: blockidx=%p request=%p loadall=%p", (void*)g_BlockIdx, (void*)g_ReqModel, (void*)g_LoadAllReq);
+    *(void**)&g_TaskNew = (void*)ResolveExact("_ZN5CTasknwEm"); *(void**)&g_NamedAnimCtor = (void*)ResolveExact("_ZN23CTaskSimpleRunNamedAnimC1EPKcS1_ifibbbb");
+    *(void**)&g_EvCmdCtor = (void*)ResolveExact("_ZN19CEventScriptCommandC1EiP5CTaskb"); *(void**)&g_EvCmdDtor = (void*)ResolveExact("_ZN19CEventScriptCommandD1Ev"); *(void**)&g_EvGroupAdd = (void*)ResolveExact("_ZN11CEventGroup3AddER6CEventb");
+    LOGI("vomit symbols: blockidx=%p request=%p loadall=%p tasknew=%p ctor=%p evctor=%p evdtor=%p evadd=%p", (void*)g_BlockIdx, (void*)g_ReqModel, (void*)g_LoadAllReq, (void*)g_TaskNew, (void*)g_NamedAnimCtor, (void*)g_EvCmdCtor, (void*)g_EvCmdDtor, (void*)g_EvGroupAdd);
     LOGI("low life symbols: getassoc=%p findveh=%p say=%p", (void*)g_GetAssoc, (void*)g_FindVeh, (void*)g_PedSay);
     g_CutRunning = (uint8_t*)ResolveExact("_ZN12CCutsceneMgr10ms_runningE");
     g_CutProc = (uint8_t*)ResolveExact("_ZN12CCutsceneMgr21ms_cutsceneProcessingE");
