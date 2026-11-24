@@ -455,9 +455,9 @@ static void LowLifeTick()
     long long now = NowMs(); if (now < g_LLNext) return; g_LLNext = now + 60;
     void* ped = g_FindPlayer(0); if (!ped) { g_LLReqBlood = 0.f; g_LLReqGrey = 0.f; return; }
     void* clump = *(void**)((uint8_t*)ped + 0x20); if (!clump) { g_LLReqBlood = 0.f; g_LLReqGrey = 0.f; return; }
-    float hp = *(float*)((uint8_t*)ped + 0x6ac); int mx = g_PlayersBase[0x18b]; if (mx < 20) mx = 100;
+    float hp = *(float*)((uint8_t*)ped + 0x6ac); float pmx = *(float*)((uint8_t*)ped + 0x6b0); int mx = (pmx >= 20.f && pmx <= 2000.f) ? (int)(pmx + 0.5f) : (int)g_PlayersBase[0x18b]; if (mx < 20) mx = 100;   // the ped's own max health is right from the start of the game; the stats copy is only refreshed after a respawn
     float pct = hp * 100.f / (float)mx;
-    if (!g_LLLoggedHp) { g_LLLoggedHp = true; if (g_Log2) LOGI("low life: health %.1f of max %d (%.1f%%)", hp, mx, pct); }
+    if (!g_LLLoggedHp) { g_LLLoggedHp = true; if (g_Log2) LOGI("low life: health %.1f of max %d (%.1f%%), ped max %.1f, stats max %d", hp, mx, pct, pmx, (int)g_PlayersBase[0x18b]); }
     bool want = pct > 0.f && pct <= g_LowHealth && (!g_IsAlive || g_IsAlive(ped)) && !(g_FindVeh && g_FindVeh(-1, false))
                 && !(g_CutRunning && *g_CutRunning) && !(g_CutProc && *g_CutProc) && (!g_InControl || g_InControl(ped));
     bool fxOn = pct > 0.f && pct <= g_LowHealth && (!g_IsAlive || g_IsAlive(ped)) && !(g_CutRunning && *g_CutRunning) && !(g_CutProc && *g_CutProc);   // heartbeat, breathing and blood stay on while climbing, in cars, etc.
