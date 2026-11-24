@@ -821,6 +821,7 @@ static void Swap_hook()
 static void DrawDeathScreen()
 {
     g_GreyReqAmt = 0.f;
+    if (g_OSW && g_OSH) { g_ScrW = g_OSW(); g_ScrH = g_OSH(); }          // screen size for the render-thread pass (also used by the low-life blood effect)
     if (!g_DeathScreen || !g_DrawRectD || !g_OSW || !g_OSH || !g_FindPlayer || !g_IsAlive) return;
     void* pl = g_FindPlayer(0); if (!pl) return;
     long long now = NowMs();
