@@ -460,6 +460,7 @@ static void LowLifeTick()
     if (!g_LLLoggedHp) { g_LLLoggedHp = true; if (g_Log2) LOGI("low life: health %.1f of max %d (%.1f%%)", hp, mx, pct); }
     bool want = pct > 0.f && pct <= g_LowHealth && (!g_IsAlive || g_IsAlive(ped)) && !(g_FindVeh && g_FindVeh(-1, false))
                 && !(g_CutRunning && *g_CutRunning) && !(g_CutProc && *g_CutProc) && (!g_InControl || g_InControl(ped));
+    bool fxOn = pct > 0.f && pct <= g_LowHealth && (!g_IsAlive || g_IsAlive(ped)) && !(g_CutRunning && *g_CutRunning) && !(g_CutProc && *g_CutProc);   // heartbeat, breathing and blood stay on while climbing, in cars, etc.
     if (want && g_LowNeedTired && !g_GetAssoc(clump, "idle_tired")) want = false;
     void* a = g_LLHier ? g_GetAssoc(clump, "stomach_hurt") : nullptr;
     if (want)
@@ -479,16 +480,16 @@ static void LowLifeTick()
         g_LLOn = false;
     }
     else g_LLOn = false;
-    HeartSet(g_LLOn && g_LowHeart);
-    PantTick(g_LLOn && g_LowPant, now);
+    HeartSet(fxOn && g_LowHeart);
+    PantTick(fxOn && g_LowPant, now);
     {
         static float fade = 0.f;
-        float target = (g_LLOn && g_LowBlood && g_GreyShader && !g_GlFailed) ? 1.f : 0.f;
+        float target = (fxOn && g_LowBlood && g_GreyShader && !g_GlFailed) ? 1.f : 0.f;
         fade += (target - fade) * (target > fade ? 0.10f : 0.12f); if (fade < 0.004f && target == 0.f) fade = 0.f;
         float sev = fminf(1.f, fmaxf(0.f, (g_LowHealth - pct) / g_LowHealth));
         g_LLReqBlood = fade * (0.55f + 0.45f * sev) * g_LowBloodStr; g_LLReqGrey = fade * g_LowGrey;
     }
-    if (g_LLOn && g_LowPantCtx > 0 && g_PedSay && now >= g_PantNext) { g_PantNext = now + g_LowPantEvery; g_PedSay(ped, (unsigned short)g_LowPantCtx, 0, 1.f, 0, 1, 0); if (g_Log2) LOGI("low life: breathing voice, speech id %d", g_LowPantCtx); }
+    if (fxOn && g_LowPantCtx > 0 && g_PedSay && now >= g_PantNext) { g_PantNext = now + g_LowPantEvery; g_PedSay(ped, (unsigned short)g_LowPantCtx, 0, 1.f, 0, 1, 0); if (g_Log2) LOGI("low life: breathing voice, speech id %d", g_LowPantCtx); }
 }
 
 typedef void (*TimerUpdate_t)(); static TimerUpdate_t TimerUpdate_orig = nullptr;
@@ -698,8 +699,7 @@ static bool GlInit()
     const char* fs =
         "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n"
         "varying vec2 vUV; uniform sampler2D uTex; uniform float uAmt; uniform float uContrast; uniform float uBright; uniform vec3 uShadow; uniform float uVig; uniform float uDiag; uniform float uBlood; uniform float uTime;\n"
-        "float hh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\n"
-        "float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(hh(i), hh(i + vec2(1.0, 0.0)), f.x), mix(hh(i + vec2(0.0, 1.0)), hh(i + vec2(1.0, 1.0)), f.x), f.y); }\n"
+        "float sn(vec2 p) { return 0.5 + 0.25 * sin(p.x * 1.7 + 1.3 * sin(p.y * 1.3 + 0.4)) + 0.25 * sin(p.y * 2.1 + 1.1 * sin(p.x * 1.1 + 1.7)); }\n"
         "void main() {\n"
         "  vec3 c = texture2D(uTex, vUV).rgb;\n"
         "  float l = dot(c, vec3(0.299, 0.587, 0.114));\n"
@@ -709,7 +709,7 @@ static bool GlInit()
         "  gr *= 1.0 - uVig * smoothstep(0.35, 1.0, d);\n"
         "  vec3 oc = mix(c, uDiag > 0.5 ? vec3(1.0, 0.0, 1.0) : gr, uAmt);\n"
         "  if (uBlood > 0.001) {\n"
-        "    float n = vn(vUV * vec2(7.0, 4.0)) * 0.6 + vn(vUV * vec2(19.0, 11.0)) * 0.4;\n"
+        "    float n = sn(vUV * vec2(9.0, 6.0)) * 0.6 + sn(vUV * vec2(23.0, 15.0) + vec2(3.1)) * 0.4;\n"
         "    float dd = length((vUV - vec2(0.5)) * vec2(1.0, 0.8)) * 1.75 + (n - 0.5) * 0.42;\n"
         "    float edge = smoothstep(0.50, 1.02, dd);\n"
         "    float pulse = 0.82 + 0.18 * sin(uTime * 7.0);\n"
