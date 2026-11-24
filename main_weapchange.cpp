@@ -455,7 +455,8 @@ static void LowLifeTick()
     long long now = NowMs(); if (now < g_LLNext) return; g_LLNext = now + 60;
     void* ped = g_FindPlayer(0); if (!ped) { g_LLReqBlood = 0.f; g_LLReqGrey = 0.f; return; }
     void* clump = *(void**)((uint8_t*)ped + 0x20); if (!clump) { g_LLReqBlood = 0.f; g_LLReqGrey = 0.f; return; }
-    float hp = *(float*)((uint8_t*)ped + 0x6ac); float pmx = *(float*)((uint8_t*)ped + 0x6b0); int mx = (pmx >= 20.f && pmx <= 2000.f) ? (int)(pmx + 0.5f) : (int)g_PlayersBase[0x18b]; if (mx < 20) mx = 100;   // the ped's own max health is right from the start of the game; the stats copy is only refreshed after a respawn
+    float hp = *(float*)((uint8_t*)ped + 0x6ac); float pmx = *(float*)((uint8_t*)ped + 0x6b0); int mx = (int)g_PlayersBase[0x18b]; if (pmx > (float)mx && pmx <= 2000.f) mx = (int)(pmx + 0.5f); if (mx < 20) mx = 100;
+    static float seenMax = 0.f; if (hp > seenMax && hp <= 2000.f) seenMax = hp; if (seenMax > (float)mx) mx = (int)(seenMax + 0.5f);   // both stored maximums can be out of date right after the game starts: never let the maximum be lower than the health actually seen
     float pct = hp * 100.f / (float)mx;
     if (!g_LLLoggedHp) { g_LLLoggedHp = true; if (g_Log2) LOGI("low life: health %.1f of max %d (%.1f%%), ped max %.1f, stats max %d", hp, mx, pct, pmx, (int)g_PlayersBase[0x18b]); }
     bool want = pct > 0.f && pct <= g_LowHealth && (!g_IsAlive || g_IsAlive(ped)) && !(g_FindVeh && g_FindVeh(-1, false))
